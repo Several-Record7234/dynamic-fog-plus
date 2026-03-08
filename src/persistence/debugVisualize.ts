@@ -175,10 +175,24 @@ export async function drawDebugShapes(
 
       for (let i = 0; i < verts.length; i++) {
         const j = (i + 1) % verts.length;
-        quadCommands.push([Command.MOVE, verts[i].x, verts[i].y]);
-        quadCommands.push([Command.LINE, verts[j].x, verts[j].y]);
-        quadCommands.push([Command.LINE, projected[j].x, projected[j].y]);
-        quadCommands.push([Command.LINE, projected[i].x, projected[i].y]);
+        const a = verts[i], b = verts[j], c = projected[j], d = projected[i];
+        // Enforce consistent CW winding (same fix as visibilityCanvasKit)
+        const sa =
+          (a.x * b.y - b.x * a.y) +
+          (b.x * c.y - c.x * b.y) +
+          (c.x * d.y - d.x * c.y) +
+          (d.x * a.y - a.x * d.y);
+        if (sa >= 0) {
+          quadCommands.push([Command.MOVE, a.x, a.y]);
+          quadCommands.push([Command.LINE, b.x, b.y]);
+          quadCommands.push([Command.LINE, c.x, c.y]);
+          quadCommands.push([Command.LINE, d.x, d.y]);
+        } else {
+          quadCommands.push([Command.MOVE, a.x, a.y]);
+          quadCommands.push([Command.LINE, d.x, d.y]);
+          quadCommands.push([Command.LINE, c.x, c.y]);
+          quadCommands.push([Command.LINE, b.x, b.y]);
+        }
         quadCommands.push([Command.CLOSE]);
       }
     }
@@ -216,10 +230,23 @@ export async function drawDebugShapes(
     for (const { verts, projected } of allVerts) {
       for (let i = 0; i < verts.length; i++) {
         const j = (i + 1) % verts.length;
-        frustumPath.moveTo(verts[i].x, verts[i].y);
-        frustumPath.lineTo(verts[j].x, verts[j].y);
-        frustumPath.lineTo(projected[j].x, projected[j].y);
-        frustumPath.lineTo(projected[i].x, projected[i].y);
+        const a = verts[i], b = verts[j], c = projected[j], d = projected[i];
+        const sa =
+          (a.x * b.y - b.x * a.y) +
+          (b.x * c.y - c.x * b.y) +
+          (c.x * d.y - d.x * c.y) +
+          (d.x * a.y - a.x * d.y);
+        if (sa >= 0) {
+          frustumPath.moveTo(a.x, a.y);
+          frustumPath.lineTo(b.x, b.y);
+          frustumPath.lineTo(c.x, c.y);
+          frustumPath.lineTo(d.x, d.y);
+        } else {
+          frustumPath.moveTo(a.x, a.y);
+          frustumPath.lineTo(d.x, d.y);
+          frustumPath.lineTo(c.x, c.y);
+          frustumPath.lineTo(b.x, b.y);
+        }
         frustumPath.close();
       }
     }

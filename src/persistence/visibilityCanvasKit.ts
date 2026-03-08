@@ -138,11 +138,12 @@ function buildVisualBoundary(
  *   Vi → Vi+1 → Vi+1' → Vi'
  * where Vi' = origin + (Vi − origin) × (farDist / |Vi − origin|)
  *
- * Individual quads are always simple (non-self-intersecting). Overlapping
- * quads are resolved by calling path.simplify() which merges them into a
- * single clean outline.  This avoids the self-intersection problem that
- * occurs when tracing all near vertices then all far vertices as one polygon
- * (far vertices cross when the shape subtends a large angle from the light).
+ * Individual quads are always simple (non-self-intersecting). However,
+ * edges on opposite sides of the shape produce quads with opposite winding
+ * directions.  Under the default Winding fill rule, overlapping quads with
+ * opposite winding cancel to winding-number 0 (unfilled), leaving a hollow
+ * shadow cone.  We enforce consistent winding so that overlapping areas
+ * always have non-zero winding, then call path.simplify() to merge them.
  *
  * Returns the simplified frustum path, or null if no valid contours.
  */
@@ -173,13 +174,27 @@ function buildShadowFrustum(
     // Project each vertex away from the light source
     const projected = verts.map((v) => projectVertex(v, origin, farDist));
 
-    // Build one quad per edge: Vi → Vi+1 → Vi+1' → Vi'
+    // Build one quad per edge with consistent winding direction.
+    // Edges on opposite sides of the shape naturally produce quads with
+    // opposite winding.  We compute signed area and reverse vertex order
+    // for CCW quads so all quads are CW (positive signed area in screen
+    // coords).  This ensures overlapping quads accumulate winding rather
+    // than cancelling.
     for (let i = 0; i < verts.length; i++) {
       const j = (i + 1) % verts.length;
-      frustumPath.moveTo(verts[i].x, verts[i].y);
-      frustumPath.lineTo(verts[j].x, verts[j].y);
-      frustumPath.lineTo(projected[j].x, projected[j].y);
-      frustumPath.lineTo(projected[i].x, projected[i].y);
+      const a = verts[i], b = verts[j], c = projected[j], d = projected[i];
+      const sa = quadSignedArea2x(a, b, c, d);
+      if (sa >= 0) {
+        frustumPath.moveTo(a.x, a.y);
+        frustumPath.lineTo(b.x, b.y);
+        frustumPath.lineTo(c.x, c.y);
+        frustumPath.lineTo(d.x, d.y);
+      } else {
+        frustumPath.moveTo(a.x, a.y);
+        frustumPath.lineTo(d.x, d.y);
+        frustumPath.lineTo(c.x, c.y);
+        frustumPath.lineTo(b.x, b.y);
+      }
       frustumPath.close();
     }
 
@@ -195,6 +210,19 @@ function buildShadowFrustum(
   frustumPath.simplify();
 
   return frustumPath;
+}
+
+/**
+ * Compute 2× the signed area of quadrilateral ABCD (shoelace formula).
+ * Positive = clockwise in screen coordinates (y-down).
+ */
+function quadSignedArea2x(a: Vector2, b: Vector2, c: Vector2, d: Vector2): number {
+  return (
+    (a.x * b.y - b.x * a.y) +
+    (b.x * c.y - c.x * b.y) +
+    (c.x * d.y - d.x * c.y) +
+    (d.x * a.y - a.x * d.y)
+  );
 }
 
 /** Project a vertex away from the light source to a fixed distance */
