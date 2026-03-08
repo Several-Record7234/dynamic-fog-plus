@@ -53,6 +53,18 @@ export function PersistenceControls() {
   const [debugVis, setDebugVis] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
+  // Auto-resize popover to fit content
+  const contentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      OBR.action.setHeight(el.scrollHeight);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   // Easter egg: track title clicks for debug toggle
   const clickTimesRef = useRef<number[]>([]);
 
@@ -159,7 +171,7 @@ export function PersistenceControls() {
 
   if (role !== "GM") {
     return (
-      <Stack px={2} py={1.5}>
+      <Stack ref={contentRef} px={2} py={1.5}>
         <Typography variant="body2" color="text.secondary">
           Persistence controls are only available to the GM.
         </Typography>
@@ -176,7 +188,7 @@ export function PersistenceControls() {
         : undefined;
 
   return (
-    <Stack px={2} py={1} gap={1}>
+    <Stack ref={contentRef} px={2} py={1} gap={1}>
       {/* Header */}
       <Typography
         variant="subtitle2"
