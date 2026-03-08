@@ -57,6 +57,9 @@ export async function writePersistenceFogItem(
   }
 
   // Create new persistence fog item
+  // zIndex 0 ensures opaque fog shapes (zIndex ~Date.now()) render on top,
+  // so even if simplification drift shrinks a hole boundary, the original
+  // fog shape visually overrides the cutout beneath it.
   const path = buildPath()
     .commands(commands)
     .fillRule("evenodd")
@@ -64,6 +67,7 @@ export async function writePersistenceFogItem(
     .visible(false) // visible: false = fog cutout (reveals map)
     .locked(true)
     .disableHit(true)
+    .zIndex(0)
     .name("Persistence Fog")
     .metadata({ [PERSISTENCE_METADATA_KEY]: true })
     .fillColor("#000000")
