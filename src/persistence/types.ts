@@ -34,6 +34,8 @@ export interface TrackedToken {
   innerAngle: number;
   /** Token rotation + light rotation offset in degrees */
   lightRotation: number;
+  /** Light falloff (0.2 = hard edge, 1.5 = soft edge, default 1) */
+  falloff: number;
 }
 
 /** Settings stored in scene metadata for persistence state */

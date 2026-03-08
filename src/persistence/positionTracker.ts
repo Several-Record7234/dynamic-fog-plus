@@ -301,6 +301,7 @@ async function handleItemsChange(items: Item[]): Promise<void> {
     const outerAngle = config.outerAngle ?? 360;
     const innerAngle = config.innerAngle ?? outerAngle;
     const lightRotation = token.rotation + (config.rotation ?? 0);
+    const falloff = config.falloff ?? 1;
 
     const tracked = trackedTokens.get(token.id);
     if (!tracked) {
@@ -311,6 +312,7 @@ async function handleItemsChange(items: Item[]): Promise<void> {
         outerAngle,
         innerAngle,
         lightRotation,
+        falloff,
       };
       trackedTokens.set(token.id, newTracked);
       await computeAndAccumulate(token.position, newTracked);
@@ -324,6 +326,7 @@ async function handleItemsChange(items: Item[]): Promise<void> {
         tracked.outerAngle = outerAngle;
         tracked.innerAngle = innerAngle;
         tracked.lightRotation = lightRotation;
+        tracked.falloff = falloff;
         await computeAndAccumulate(token.position, tracked);
       }
     }
@@ -352,9 +355,11 @@ async function computeAndAccumulate(
 
   const t0 = performance.now();
 
-  // Scale radius to 90% so persistence stays inside the light's feathered edge,
-  // avoiding a hard cutout boundary that extends beyond the visible light.
-  const persistenceRadius = tracked.attenuationRadius * 0.90;
+  // Scale radius so persistence stays inside the light's feathered edge.
+  // Hard-edge lights (falloff <= 0.5) have a sharper boundary so 90% suffices.
+  // Soft-edge lights (falloff >= 1) fade out more gradually, needing a tighter cut.
+  const radiusScale = tracked.falloff <= 0.5 ? 0.90 : 0.80;
+  const persistenceRadius = tracked.attenuationRadius * radiusScale;
 
   const visPath = computeVisibilityPath(
     canvasKit,
