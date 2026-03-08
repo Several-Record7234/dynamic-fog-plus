@@ -16,17 +16,14 @@ const SHADOW_PROJECTION_FACTOR = 3;
 /**
  * Compute visibility using CanvasKit path boolean operations.
  *
- * For each FOG-layer shape we build a "shadow frustum" — the shape itself
- * plus a projection of its silhouette away from the light source — and
- * collect everything into a single blocker path.  One PathOp.Difference
- * then removes the blocker from the light circle.
+ * For each FOG-layer shape we:
+ *  1. Subtract the filled shape itself (accurate curved boundary)
+ *  2. Build a "shadow frustum" — a projection of the shape's outline
+ *     away from the light source — and subtract that too
  *
- * This approach handles both:
- *  - Shape occlusion (the filled fog shape blocks the shape interior)
- *  - Line-of-sight shadows (the frustum blocks the area BEHIND each shape)
- *
- * It replaces the custom angular-sweep algorithm which leaked at
- * wall-corner junctions and struggled with numerical precision.
+ * Each subtraction is a separate PathOp.Difference call to avoid
+ * winding-direction conflicts that occur when mixing sub-paths in
+ * a single blocker path (opposing windings cancel under non-zero fill).
  */
 export function computeVisibilityCanvasKit(
   CK: CanvasKit,
@@ -45,8 +42,6 @@ export function computeVisibilityCanvasKit(
     addSectorToPath(lightPath, origin, radius, outerAngle, rotationDeg);
   }
 
-  // Accumulate all fog shapes + their shadow frustums into one blocker path
-  const blockerPath = new CK.Path();
   let shapeCount = 0;
   const farDist = radius * SHADOW_PROJECTION_FACTOR;
 
@@ -62,21 +57,19 @@ export function computeVisibilityCanvasKit(
     const transform = MathM.fromItem(item);
     fogPath.transform(...transform);
 
-    // Add the filled fog shape itself (accurate curves)
-    blockerPath.addPath(fogPath);
+    // 1. Subtract the filled fog shape (accurate curved boundary)
+    lightPath.op(fogPath, CK.PathOp.Difference);
 
-    // Add the shadow frustum (covers everything behind the shape)
-    addShadowFrustum(CK, blockerPath, fogPath, origin, farDist);
+    // 2. Build and subtract the shadow frustum (area behind the shape)
+    const frustumPath = buildShadowFrustum(CK, fogPath, origin, farDist);
+    if (frustumPath) {
+      lightPath.op(frustumPath, CK.PathOp.Difference);
+      frustumPath.delete();
+    }
 
     fogPath.delete();
     shapeCount++;
   }
-
-  // Single boolean difference: light minus all blockers+shadows
-  if (shapeCount > 0) {
-    lightPath.op(blockerPath, CK.PathOp.Difference);
-  }
-  blockerPath.delete();
 
   console.log(
     `[Persistence] CanvasKit visibility: ${shapeCount} fog shapes + shadow frustums subtracted`
@@ -92,29 +85,29 @@ export function computeVisibilityCanvasKit(
 }
 
 /**
- * Add a shadow frustum to `out` for each contour of `shapePath`.
+ * Build a shadow frustum path for a fog shape.
  *
- * The frustum is a single polygon formed by tracing the shape's vertices
- * forward, then tracing the projected vertices backward:
+ * For each contour of the shape, creates a frustum polygon by tracing
+ * the contour vertices forward, then their projections (from the light
+ * source) backward:
  *
  *   V0 → V1 → … → VN → VN' → … → V1' → V0'
  *
  * where Vi' = origin + (Vi − origin) × (farDist / |Vi − origin|)
  *
- * For a convex shape this creates a clean frustum.  For concave shapes the
- * polygon may self-intersect, but CanvasKit's winding fill rule handles
- * that correctly — the net effect is that everything behind the shape
- * (from the light's perspective) is covered.
+ * Returns a NEW path (caller must delete) or null if no valid contours.
  */
-function addShadowFrustum(
+function buildShadowFrustum(
   CK: CanvasKit,
-  out: SkPath,
   shapePath: SkPath,
   origin: Vector2,
   farDist: number
-): void {
+): SkPath | null {
   const commands = PathHelpers.skPathToPathCommands(shapePath);
   const contours = PathHelpers.commandsToPolylines(CK, commands, 15);
+
+  let hasContent = false;
+  const frustumPath = new CK.Path();
 
   for (let verts of contours) {
     if (verts.length < 3) continue;
@@ -134,24 +127,38 @@ function addShadowFrustum(
       const dy = v.y - origin.y;
       const len = Math.sqrt(dx * dx + dy * dy);
       if (len < 0.01) {
-        // Degenerate: vertex at the light origin — push in an arbitrary direction
+        // Degenerate: vertex at the light origin — push arbitrarily
         return { x: origin.x + farDist, y: origin.y };
       }
       const scale = farDist / len;
       return { x: origin.x + dx * scale, y: origin.y + dy * scale };
     });
 
-    // Build the frustum polygon: original vertices forward, projected backward
-    const flat: number[] = [];
-    for (const v of verts) {
-      flat.push(v.x, v.y);
-    }
-    for (let i = projected.length - 1; i >= 0; i--) {
-      flat.push(projected[i].x, projected[i].y);
+    // Build per-edge shadow quads instead of a single frustum polygon.
+    // Individual quads avoid self-intersection issues with concave shapes
+    // and have consistent winding regardless of the source contour direction.
+    for (let i = 0; i < verts.length; i++) {
+      const j = (i + 1) % verts.length;
+      frustumPath.addPoly(
+        [
+          verts[i].x, verts[i].y,
+          verts[j].x, verts[j].y,
+          projected[j].x, projected[j].y,
+          projected[i].x, projected[i].y,
+        ],
+        true
+      );
     }
 
-    out.addPoly(flat, true);
+    hasContent = true;
   }
+
+  if (!hasContent) {
+    frustumPath.delete();
+    return null;
+  }
+
+  return frustumPath;
 }
 
 /**
