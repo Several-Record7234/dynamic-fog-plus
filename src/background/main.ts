@@ -11,8 +11,6 @@ import { WallReactor } from "./reconcile/reactors/WallReactor";
 import { initOverlay } from "./overlay";
 import { createLineMode } from "./createLineMode";
 import { initPositionTracker, destroyPositionTracker } from "../persistence/positionTracker";
-import { restoreAccumulator } from "../persistence/polygonAccumulator";
-import { readPersistenceFogItem } from "../persistence/fogWriter";
 
 async function waitUntilOBRReady() {
   return new Promise<void>((resolve) => {
@@ -40,10 +38,6 @@ async function init() {
   // OBR.onReady fires when the SDK connects, but scene APIs throw
   // "No scene found" if no scene is loaded yet.
   async function initPersistence() {
-    const savedRings = await readPersistenceFogItem();
-    if (savedRings) {
-      restoreAccumulator(savedRings);
-    }
     await initPositionTracker(CanvasKit);
   }
 

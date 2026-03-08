@@ -1,4 +1,4 @@
-import OBR, { buildPath, Command } from "@owlbear-rodeo/sdk";
+import OBR, { buildPath, Command, isShape } from "@owlbear-rodeo/sdk";
 import type { CanvasKit } from "canvaskit-wasm";
 import type { Vector2, Item, PathCommand, Path } from "@owlbear-rodeo/sdk";
 import { MathM } from "@owlbear-rodeo/sdk";
@@ -84,13 +84,18 @@ export async function drawDebugShapes(
     if (!isDrawing(item)) continue;
     if (PERSISTENCE_METADATA_KEY in item.metadata) continue;
 
-    const fogPath = PathHelpers.drawingToSkPath(item as Drawing, CK);
+    const drawing = item as Drawing;
+    const fogPath = PathHelpers.drawingToSkPath(drawing, CK);
     if (!fogPath) continue;
 
-    const transform = MathM.fromItem(item);
-    fogPath.transform(...transform);
+    // Build visual boundary (fill + stroke) to match the actual visibility code
+    const visualPath = buildDebugVisualBoundary(CK, fogPath, drawing);
+    fogPath.delete();
 
-    const commands = PathHelpers.skPathToPathCommands(fogPath);
+    const transform = MathM.fromItem(item);
+    visualPath.transform(...transform);
+
+    const commands = PathHelpers.skPathToPathCommands(visualPath);
     const contours = PathHelpers.commandsToPolylines(CK, commands, 15);
 
     // Build edge quads for visualization
@@ -211,7 +216,7 @@ export async function drawDebugShapes(
       );
     }
 
-    fogPath.delete();
+    visualPath.delete();
     colorIdx++;
   }
 
@@ -219,6 +224,32 @@ export async function drawDebugShapes(
     await OBR.scene.items.addItems(itemsToAdd);
     console.log(`[Persistence DEBUG] Added ${itemsToAdd.length} debug shapes`);
   }
+}
+
+/** Build the visual boundary (fill + stroke) for a fog drawing */
+function buildDebugVisualBoundary(
+  CK: CanvasKit,
+  fogPath: import("canvaskit-wasm").Path,
+  drawing: Drawing
+): import("canvaskit-wasm").Path {
+  const sw = drawing.style.strokeWidth;
+  const so = drawing.style.strokeOpacity;
+  if (!sw || sw <= 0 || !so || so <= 0) {
+    return fogPath.copy();
+  }
+  const strokePath = fogPath.copy();
+  strokePath.stroke({
+    cap: isShape(drawing) ? CK.StrokeCap.Square : CK.StrokeCap.Round,
+    join: isShape(drawing) ? CK.StrokeJoin.Miter : CK.StrokeJoin.Round,
+    width: sw,
+  });
+  if ("fillOpacity" in drawing.style && drawing.style.fillOpacity > 0) {
+    const combined = fogPath.copy();
+    combined.op(strokePath, CK.PathOp.Union);
+    strokePath.delete();
+    return combined;
+  }
+  return strokePath;
 }
 
 /** Remove all debug visualization shapes from the scene */

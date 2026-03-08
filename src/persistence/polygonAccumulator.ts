@@ -1,16 +1,21 @@
-import polygonClipping from "polygon-clipping";
-import type { Pair, Polygon as PCPolygon, MultiPolygon as PCMultiPolygon } from "polygon-clipping";
+import type { CanvasKit, Path as SkPath } from "canvaskit-wasm";
+import type { PathCommand } from "@owlbear-rodeo/sdk";
+import { Command } from "@owlbear-rodeo/sdk";
 import simplify from "simplify-js";
-import type { Vector2 } from "@owlbear-rodeo/sdk";
-import type { Ring } from "./types";
+import { PathHelpers } from "../background/util/PathHelpers";
 
 /**
- * The accumulated multi-polygon representing all areas revealed so far.
- * Uses polygon-clipping's coordinate format: number[][][]
- * MultiPolygon = Polygon[] where Polygon = Ring[] (outer ring + hole rings)
- * Ring = [number, number][]
+ * CanvasKit-based polygon accumulator.
+ *
+ * Uses PathOp.Union to merge visibility paths, which correctly preserves
+ * holes (fog shape carve-outs) that polygon-clipping's per-ring union lost.
  */
-let accumulated: PCMultiPolygon | null = null;
+
+/** The accumulated CanvasKit Path (caller must init before use) */
+let accumulated: SkPath | null = null;
+
+/** Cached CanvasKit instance (set via initAccumulator) */
+let ck: CanvasKit | null = null;
 
 /** Count of union operations since last simplification */
 let unionsSinceSimplify = 0;
@@ -18,81 +23,63 @@ let unionsSinceSimplify = 0;
 /**
  * Vertex budget thresholds.
  *
- * These control how aggressively the accumulator manages vertex count to
- * avoid destabilising OBR's native fog rasterisation, scene sync, and
- * memory usage. Each threshold triggers a different strategy:
- *
  * - SIMPLIFY_SOFT:  periodic low-tolerance simplification (imperceptible)
  * - SIMPLIFY_HARD:  aggressive simplification at higher tolerance
- * - REGION_SPLIT:   stop unioning and start a new disjoint region instead
  * - REJECT:         refuse to accumulate (the UI warns to reset)
  */
 const SIMPLIFY_SOFT_VERTEX_COUNT = 1500;
 const SIMPLIFY_HARD_VERTEX_COUNT = 3000;
-const REGION_SPLIT_VERTEX_COUNT = 5000;
 const REJECT_VERTEX_COUNT = 8000;
 
 /** Simplify every N unions even if under threshold (keeps things tidy) */
 const SIMPLIFY_INTERVAL = 10;
 
 /** Douglas-Peucker tolerances in scene pixels */
-const TOLERANCE_SOFT = 1.5;   // imperceptible
-const TOLERANCE_HARD = 4;     // slightly visible at dungeon edges, acceptable
+const TOLERANCE_SOFT = 1.5;
+const TOLERANCE_HARD = 4;
 
 /** Result of an accumulate call, for the caller to react to */
 export type AccumulateResult =
   | { status: "ok" }
   | { status: "simplified"; tolerance: number }
-  | { status: "region_split" }
   | { status: "rejected"; vertexCount: number };
 
+/** Store the CanvasKit reference for path operations */
+export function initAccumulator(CK: CanvasKit): void {
+  ck = CK;
+}
+
 /**
- * Add a new visibility polygon to the accumulated area via boolean union.
- * Returns a status indicating what strategy was applied.
+ * Union a visibility path into the accumulated area.
+ *
+ * Unlike the old per-ring approach, this operates on the full CanvasKit path
+ * which correctly preserves holes (fog shape carve-outs) through the union.
  */
-export function accumulatePolygon(visPolygon: Ring): AccumulateResult {
+export function accumulateVisibilityPath(visPath: SkPath): AccumulateResult {
+  if (!ck) throw new Error("Accumulator not initialized — call initAccumulator first");
+
   const currentCount = getTotalVertexCount();
 
-  // Hard reject: accumulated polygon is too large to safely grow
   if (currentCount >= REJECT_VERTEX_COUNT) {
     return { status: "rejected", vertexCount: currentCount };
   }
 
-  const newPoly = ringToPCPolygon(visPolygon);
-
-  // Region split: skip union (which grows complexity) and add as separate polygon
-  if (currentCount >= REGION_SPLIT_VERTEX_COUNT) {
-    if (!accumulated) {
-      accumulated = [newPoly];
-    } else {
-      accumulated.push(newPoly);
-    }
-    // Immediately simplify the new region
-    simplifyAccumulated(TOLERANCE_HARD);
-    return { status: "region_split" };
-  }
-
-  // Normal union
   if (!accumulated) {
-    accumulated = [newPoly];
+    accumulated = visPath.copy();
   } else {
-    accumulated = polygonClipping.union(accumulated, newPoly);
+    accumulated.op(visPath, ck.PathOp.Union);
   }
 
   unionsSinceSimplify++;
+  const newCount = getTotalVertexCount();
 
-  // Aggressive simplification when approaching limits
-  if (currentCount >= SIMPLIFY_HARD_VERTEX_COUNT) {
+  if (newCount >= SIMPLIFY_HARD_VERTEX_COUNT) {
     simplifyAccumulated(TOLERANCE_HARD);
     unionsSinceSimplify = 0;
     return { status: "simplified", tolerance: TOLERANCE_HARD };
   }
 
-  // Soft simplification: periodic or when crossing the soft threshold
-  if (
-    unionsSinceSimplify >= SIMPLIFY_INTERVAL ||
-    getTotalVertexCount() > SIMPLIFY_SOFT_VERTEX_COUNT
-  ) {
+  if (unionsSinceSimplify >= SIMPLIFY_INTERVAL || newCount > SIMPLIFY_SOFT_VERTEX_COUNT) {
     simplifyAccumulated(TOLERANCE_SOFT);
     unionsSinceSimplify = 0;
     return { status: "simplified", tolerance: TOLERANCE_SOFT };
@@ -102,96 +89,109 @@ export function accumulatePolygon(visPolygon: Ring): AccumulateResult {
 }
 
 /**
- * Get the accumulated polygon as an array of OBR-compatible rings.
- * Returns null if nothing has been accumulated yet.
- *
- * The result is a multi-polygon: each entry is an outer ring,
- * potentially followed by hole rings. For the fog writer, we need
- * all rings as Path subpaths.
+ * Get the accumulated path as OBR PathCommands, ready for the fog writer.
+ * Returns null if nothing has been accumulated.
  */
-export function getAccumulatedPolygon(): Ring[][] | null {
+export function getAccumulatedPathCommands(): PathCommand[] | null {
   if (!accumulated) return null;
-
-  const result: Ring[][] = [];
-  for (const polygon of accumulated) {
-    const rings: Ring[] = [];
-    for (const ring of polygon) {
-      rings.push(pcRingToRing(ring));
-    }
-    result.push(rings);
-  }
-  return result;
+  return PathHelpers.skPathToPathCommands(accumulated);
 }
 
-/** Get the total vertex count across all accumulated polygons */
+/** Get the total vertex count of the accumulated path */
 export function getTotalVertexCount(): number {
   if (!accumulated) return 0;
+  const cmds = PathHelpers.skPathToPathCommands(accumulated);
   let count = 0;
-  for (const polygon of accumulated) {
-    for (const ring of polygon) {
-      count += ring.length;
-    }
+  for (const cmd of cmds) {
+    if (cmd[0] !== Command.CLOSE) count++;
   }
   return count;
 }
 
 /** Reset the accumulator (clear all persistence data) */
 export function resetAccumulator(): void {
-  accumulated = null;
+  if (accumulated) {
+    accumulated.delete();
+    accumulated = null;
+  }
   unionsSinceSimplify = 0;
 }
 
 /**
- * Restore accumulated state from a previously saved set of rings.
+ * Restore accumulated state from a previously saved set of PathCommands.
  * Called on startup to restore from the existing fog item's geometry.
  */
-export function restoreAccumulator(rings: Ring[][]): void {
-  if (rings.length === 0) {
-    accumulated = null;
-    return;
-  }
-
-  accumulated = rings.map((polygonRings) =>
-    polygonRings.map((ring) => ringToPCRing(ring))
-  );
-  unionsSinceSimplify = 0;
+export function restoreFromPathCommands(commands: PathCommand[]): void {
+  if (!ck) throw new Error("Accumulator not initialized — call initAccumulator first");
+  resetAccumulator();
+  if (commands.length === 0) return;
+  accumulated = pathCommandsToSkPath(ck, commands);
 }
 
 /**
- * Apply Douglas-Peucker simplification to all rings in the accumulated polygon.
- * Rings that simplify below 3 points are dropped (degenerate).
+ * Apply Douglas-Peucker simplification to the accumulated path.
+ *
+ * Converts to polylines, simplifies each, and rebuilds the path.
+ * Winding direction is preserved because simplify-js only removes
+ * intermediate points without reordering.
  */
 function simplifyAccumulated(tolerance: number): void {
-  if (!accumulated) return;
+  if (!accumulated || !ck) return;
 
-  accumulated = accumulated
-    .map((polygon) =>
-      polygon
-        .map((ring) => {
-          const points = ring.map(([x, y]) => ({ x, y }));
-          const simplified = simplify(points, tolerance, true);
-          return simplified.map((p): Pair => [p.x, p.y]);
-        })
-        .filter((ring) => ring.length >= 3)
-    )
-    .filter((polygon) => polygon.length > 0);
+  const commands = PathHelpers.skPathToPathCommands(accumulated);
+  const polylines = PathHelpers.commandsToPolylines(ck, commands, 10);
 
-  if (accumulated.length === 0) {
-    accumulated = null;
+  const newPath = new ck.Path();
+
+  for (let verts of polylines) {
+    if (verts.length < 3) continue;
+
+    // Strip duplicate closing vertex
+    const first = verts[0];
+    const last = verts[verts.length - 1];
+    if ((last.x - first.x) ** 2 + (last.y - first.y) ** 2 < 1) {
+      verts = verts.slice(0, -1);
+    }
+    if (verts.length < 3) continue;
+
+    const simplified = simplify(verts, tolerance, true);
+    if (simplified.length < 3) continue;
+
+    newPath.moveTo(simplified[0].x, simplified[0].y);
+    for (let i = 1; i < simplified.length; i++) {
+      newPath.lineTo(simplified[i].x, simplified[i].y);
+    }
+    newPath.close();
   }
+
+  accumulated.delete();
+  accumulated = newPath;
 }
 
-/** Convert our Ring (Vector2[]) to a polygon-clipping Polygon (single outer ring, no holes) */
-function ringToPCPolygon(ring: Ring): PCPolygon {
-  return [ringToPCRing(ring)];
-}
-
-/** Convert our Ring (Vector2[]) to a polygon-clipping Ring ([number, number][]) */
-function ringToPCRing(ring: Ring): Pair[] {
-  return ring.map((p): Pair => [p.x, p.y]);
-}
-
-/** Convert a polygon-clipping Ring back to our Ring (Vector2[]) */
-function pcRingToRing(pcRing: Pair[]): Ring {
-  return pcRing.map(([x, y]): Vector2 => ({ x, y }));
+/** Convert OBR PathCommands to a CanvasKit Path */
+function pathCommandsToSkPath(CK: CanvasKit, commands: PathCommand[]): SkPath {
+  const path = new CK.Path();
+  for (const cmd of commands) {
+    switch (cmd[0]) {
+      case Command.MOVE:
+        path.moveTo(cmd[1], cmd[2]);
+        break;
+      case Command.LINE:
+        path.lineTo(cmd[1], cmd[2]);
+        break;
+      case Command.QUAD:
+        path.quadTo(cmd[1], cmd[2], cmd[3], cmd[4]);
+        break;
+      case Command.CONIC:
+        path.conicTo(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5]);
+        break;
+      case Command.CUBIC:
+        path.cubicTo(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6]);
+        break;
+      case Command.CLOSE:
+        path.close();
+        break;
+    }
+  }
+  return path;
 }

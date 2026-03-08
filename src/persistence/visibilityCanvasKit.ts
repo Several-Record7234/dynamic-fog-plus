@@ -1,10 +1,9 @@
 import type { CanvasKit, Path as SkPath } from "canvaskit-wasm";
 import type { Vector2, Item } from "@owlbear-rodeo/sdk";
-import { MathM } from "@owlbear-rodeo/sdk";
+import { isShape, MathM } from "@owlbear-rodeo/sdk";
 import { PathHelpers } from "../background/util/PathHelpers";
 import { isDrawing } from "../types/Drawing";
 import type { Drawing } from "../types/Drawing";
-import type { Ring } from "./types";
 import { PERSISTENCE_METADATA_KEY } from "./fogWriter";
 
 /**
@@ -16,24 +15,22 @@ const SHADOW_PROJECTION_FACTOR = 3;
 /**
  * Compute visibility using CanvasKit path boolean operations.
  *
+ * Returns a CanvasKit Path representing the visible area.  The caller
+ * owns the returned path and must call .delete() when done.
+ *
  * For each FOG-layer shape we:
  *  1. Subtract the filled shape itself (accurate curved boundary)
  *  2. Build per-edge shadow quads projected away from the light,
  *     simplify them to resolve overlaps, and subtract the result
- *
- * Each subtraction is a separate PathOp.Difference call to avoid
- * winding-direction conflicts that occur when mixing sub-paths in
- * a single blocker path (opposing windings cancel under non-zero fill).
  */
-export function computeVisibilityCanvasKit(
+export function computeVisibilityPath(
   CK: CanvasKit,
   origin: Vector2,
   radius: number,
   fogItems: Item[],
   outerAngle: number = 360,
   rotationDeg: number = 0
-): Ring[] {
-  // Build the light shape (full circle or cone sector)
+): SkPath {
   const lightPath = new CK.Path();
 
   if (outerAngle >= 360) {
@@ -43,8 +40,6 @@ export function computeVisibilityCanvasKit(
   }
 
   let shapeCount = 0;
-  let shapeOpFails = 0;
-  let frustumOpFails = 0;
   const farDist = radius * SHADOW_PROJECTION_FACTOR;
 
   for (const item of fogItems) {
@@ -52,41 +47,77 @@ export function computeVisibilityCanvasKit(
     if (!isDrawing(item)) continue;
     if (PERSISTENCE_METADATA_KEY in item.metadata) continue;
 
-    const fogPath = PathHelpers.drawingToSkPath(item as Drawing, CK);
+    const drawing = item as Drawing;
+    const fogPath = PathHelpers.drawingToSkPath(drawing, CK);
     if (!fogPath) continue;
 
-    // Transform local-space path to world space
+    // Build the full visual boundary (fill + stroke) like WallHelpers does.
+    // Without stroke, the frustum starts from the fill center line, leaving
+    // a gap between the visual fog boundary and the shadow.
+    const visualPath = buildVisualBoundary(CK, fogPath, drawing);
+
     const transform = MathM.fromItem(item);
-    fogPath.transform(...transform);
+    visualPath.transform(...transform);
 
-    // 1. Subtract the filled fog shape (accurate curved boundary)
-    const shapeOk = lightPath.op(fogPath, CK.PathOp.Difference);
-    if (!shapeOk) shapeOpFails++;
+    lightPath.op(visualPath, CK.PathOp.Difference);
 
-    // 2. Build and subtract the shadow frustum (area behind the shape)
-    const frustumPath = buildShadowFrustum(CK, fogPath, origin, farDist);
+    const frustumPath = buildShadowFrustum(CK, visualPath, origin, farDist);
     if (frustumPath) {
-      const frustumOk = lightPath.op(frustumPath, CK.PathOp.Difference);
-      if (!frustumOk) frustumOpFails++;
+      lightPath.op(frustumPath, CK.PathOp.Difference);
       frustumPath.delete();
     }
 
     fogPath.delete();
+    visualPath.delete();
     shapeCount++;
   }
 
-  console.log(
-    `[Persistence] CanvasKit visibility: ${shapeCount} fog shapes subtracted ` +
-    `(shapeOpFails=${shapeOpFails}, frustumOpFails=${frustumOpFails})`
-  );
+  console.log(`[Persistence] CanvasKit visibility: ${shapeCount} fog shapes subtracted`);
+  return lightPath;
+}
 
-  // Convert the remaining path to polyline rings
-  const commands = PathHelpers.skPathToPathCommands(lightPath);
-  const polylines = PathHelpers.commandsToPolylines(CK, commands, 10);
-  lightPath.delete();
+/**
+ * Build the full visual boundary of a fog drawing (fill + stroke).
+ *
+ * OBR renders fog shapes with both fill and stroke. The stroke extends
+ * beyond the fill path by half the stroke width. If we only use the fill
+ * path, the shadow frustum starts from the center line of the stroke,
+ * leaving a visible gap between the fog shape edge and the shadow.
+ *
+ * Returns a NEW path — the caller must delete both it and the original fogPath.
+ */
+function buildVisualBoundary(
+  CK: CanvasKit,
+  fogPath: SkPath,
+  drawing: Drawing
+): SkPath {
+  const sw = drawing.style.strokeWidth;
+  const so = drawing.style.strokeOpacity;
 
-  // Drop degenerate contours
-  return polylines.filter((p) => p.length >= 3);
+  // No stroke or invisible stroke — just use the fill path
+  if (!sw || sw <= 0 || !so || so <= 0) {
+    return fogPath.copy();
+  }
+
+  // Create stroke outline (same logic as WallHelpers)
+  const strokePath = fogPath.copy();
+  strokePath.stroke({
+    cap: isShape(drawing) ? CK.StrokeCap.Square : CK.StrokeCap.Round,
+    join: isShape(drawing) ? CK.StrokeJoin.Miter : CK.StrokeJoin.Round,
+    width: sw,
+  });
+
+  // Union fill + stroke to get the full visual boundary
+  const hasFill = "fillOpacity" in drawing.style && drawing.style.fillOpacity > 0;
+  if (hasFill) {
+    const combined = fogPath.copy();
+    combined.op(strokePath, CK.PathOp.Union);
+    strokePath.delete();
+    return combined;
+  }
+
+  // Stroke-only shape
+  return strokePath;
 }
 
 /**

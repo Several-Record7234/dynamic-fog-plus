@@ -9,9 +9,16 @@ import { getMetadata } from "../util/getMetadata";
 import type { LightConfig } from "../types/LightConfig";
 import type { TrackedToken, PersistenceSettings } from "./types";
 import { DEFAULT_PERSISTENCE_SETTINGS } from "./types";
-import { computeVisibilityCanvasKit } from "./visibilityCanvasKit";
-import { accumulatePolygon, getAccumulatedPolygon, getTotalVertexCount, resetAccumulator } from "./polygonAccumulator";
-import { writePersistenceFogItem, removePersistenceFogItem } from "./fogWriter";
+import { computeVisibilityPath } from "./visibilityCanvasKit";
+import {
+  initAccumulator,
+  accumulateVisibilityPath,
+  getAccumulatedPathCommands,
+  getTotalVertexCount,
+  resetAccumulator,
+  restoreFromPathCommands,
+} from "./polygonAccumulator";
+import { writePersistenceFogItem, removePersistenceFogItem, readPersistenceFogItem } from "./fogWriter";
 import { drawDebugShapes, removeDebugShapes } from "./debugVisualize";
 
 /** Map of token item IDs to their tracked state */
@@ -53,10 +60,18 @@ let cachedFogItems: Item[] = [];
 export async function initPositionTracker(CK: CanvasKit): Promise<void> {
   console.log("[Persistence] initPositionTracker called");
   canvasKit = CK;
+  initAccumulator(CK);
 
   const role = await OBR.player.getRole();
   console.log(`[Persistence] Player role: ${role}`);
   if (role !== "GM") return;
+
+  // Restore accumulated state from existing persistence fog item
+  const existingCommands = await readPersistenceFogItem();
+  if (existingCommands) {
+    restoreFromPathCommands(existingCommands);
+    console.log(`[Persistence] Restored existing persistence geometry (${existingCommands.length} commands)`);
+  }
 
   // Get initial DPI
   OBR.scene.grid.getDpi().then((dpi) => {
@@ -77,9 +92,7 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
     );
   });
 
-  // Subscribe to scene item changes.
-  // We cache FOG-layer items separately for the CanvasKit visibility pass
-  // and also detect light-bearing token movement.
+  // Subscribe to scene item changes
   const unsubItems = OBR.scene.items.onChange((items) => {
     cachedFogItems = items.filter((i) => i.layer === "FOG");
     handleItemsChange(items);
@@ -161,6 +174,7 @@ export function destroyPositionTracker(): void {
   unsubscribes = [];
   trackedTokens.clear();
   cachedFogItems = [];
+  resetAccumulator();
   canvasKit = null;
 }
 
@@ -193,17 +207,14 @@ export async function resetPersistence(): Promise<void> {
 async function handleItemsChange(items: Item[]): Promise<void> {
   if (!settings.enabled) return;
 
-  // Find tokens with light metadata
   const lightTokens = items.filter(
     (item) => getPluginId("light") in item.metadata
   );
 
-  // Update tracked tokens
   const currentIds = new Set<string>();
   for (const token of lightTokens) {
     currentIds.add(token.id);
 
-    // Skip excluded tokens
     if (settings.excludedTokens.includes(token.id)) continue;
 
     const config = getMetadata<LightConfig>(
@@ -219,7 +230,6 @@ async function handleItemsChange(items: Item[]): Promise<void> {
 
     const tracked = trackedTokens.get(token.id);
     if (!tracked) {
-      // New token: initialize tracking and compute first visibility
       const newTracked: TrackedToken = {
         itemId: token.id,
         lastComputedPosition: { ...token.position },
@@ -231,7 +241,6 @@ async function handleItemsChange(items: Item[]): Promise<void> {
       trackedTokens.set(token.id, newTracked);
       await computeAndAccumulate(token.position, newTracked);
     } else {
-      // Existing token: check if it moved beyond the distance threshold
       const threshold = cachedDpi / 2;
       const dist = Math2.distance(token.position, tracked.lastComputedPosition);
 
@@ -246,7 +255,6 @@ async function handleItemsChange(items: Item[]): Promise<void> {
     }
   }
 
-  // Remove tracked tokens that no longer have light metadata
   for (const id of trackedTokens.keys()) {
     if (!currentIds.has(id)) {
       trackedTokens.delete(id);
@@ -255,8 +263,9 @@ async function handleItemsChange(items: Item[]): Promise<void> {
 }
 
 /**
- * Compute visibility at a position and accumulate it into the persistence polygon.
- * Uses CanvasKit path-boolean operations against FOG shapes for robust wall clipping.
+ * Compute visibility at a position and accumulate into the persistence path.
+ * Uses CanvasKit path-boolean operations for both visibility and accumulation,
+ * which correctly preserves holes where fog shapes were subtracted.
  */
 async function computeAndAccumulate(
   position: Vector2,
@@ -269,8 +278,7 @@ async function computeAndAccumulate(
 
   const t0 = performance.now();
 
-  // Compute visibility by subtracting FOG shapes from the light circle
-  const visRings = computeVisibilityCanvasKit(
+  const visPath = computeVisibilityPath(
     canvasKit,
     position,
     tracked.attenuationRadius,
@@ -281,8 +289,8 @@ async function computeAndAccumulate(
 
   const t1 = performance.now();
 
-  // Draw debug shapes if enabled (on every computation so they track the token)
-  if (debugVis && canvasKit) {
+  // Draw debug shapes if enabled
+  if (debugVis) {
     drawDebugShapes(
       canvasKit,
       position,
@@ -293,34 +301,21 @@ async function computeAndAccumulate(
     );
   }
 
-  const totalVerts = visRings.reduce((sum, r) => sum + r.length, 0);
-  console.log(
-    `[Persistence] CanvasKit visibility: ${visRings.length} rings, ${totalVerts} total vertices ` +
-    `(${cachedFogItems.length} FOG items, ${(t1 - t0).toFixed(1)}ms)`
-  );
-
-  if (visRings.length === 0) return;
-
-  // Accumulate each ring into the running polygon
-  let lastAccResult: ReturnType<typeof accumulatePolygon> = { status: "ok" };
-  for (const ring of visRings) {
-    if (ring.length < 3) continue;
-    lastAccResult = accumulatePolygon(ring);
-    if (lastAccResult.status === "rejected") break;
-  }
+  // Accumulate via CanvasKit PathOp.Union (preserves holes)
+  const accResult = accumulateVisibilityPath(visPath);
+  visPath.delete();
 
   const t2 = performance.now();
 
-  // If rejected, don't write — just publish the warning
-  if (lastAccResult.status === "rejected") {
+  if (accResult.status === "rejected") {
     await OBR.scene.setMetadata({
-      [getPluginId("persistence-vertex-count")]: lastAccResult.vertexCount,
+      [getPluginId("persistence-vertex-count")]: accResult.vertexCount,
       [getPluginId("persistence-perf")]: {
         totalMs: 0,
         visMs: 0,
         unionMs: 0,
         wallCount: cachedFogItems.length,
-        vertexCount: lastAccResult.vertexCount,
+        vertexCount: accResult.vertexCount,
         status: "rejected",
       },
     });
@@ -328,9 +323,9 @@ async function computeAndAccumulate(
   }
 
   // Write to the FOG layer
-  const accumulated = getAccumulatedPolygon();
-  if (accumulated) {
-    await writePersistenceFogItem(accumulated);
+  const commands = getAccumulatedPathCommands();
+  if (commands && commands.length > 0) {
+    await writePersistenceFogItem(commands);
   }
 
   const totalMs = performance.now() - t0;
@@ -338,7 +333,11 @@ async function computeAndAccumulate(
   const unionMs = t2 - t1;
   const vertexCount = getTotalVertexCount();
 
-  // Publish metrics to scene metadata for the action UI
+  console.log(
+    `[Persistence] Cycle: vis=${visMs.toFixed(1)}ms union=${unionMs.toFixed(1)}ms ` +
+    `total=${totalMs.toFixed(1)}ms verts=${vertexCount} status=${accResult.status}`
+  );
+
   await OBR.scene.setMetadata({
     [getPluginId("persistence-vertex-count")]: vertexCount,
     [getPluginId("persistence-perf")]: {
@@ -347,7 +346,7 @@ async function computeAndAccumulate(
       unionMs: Math.round(unionMs * 100) / 100,
       wallCount: cachedFogItems.length,
       vertexCount,
-      status: lastAccResult.status,
+      status: accResult.status,
     },
   });
 }
