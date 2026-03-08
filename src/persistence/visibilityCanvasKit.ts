@@ -40,6 +40,8 @@ export function computeVisibilityPath(
   }
 
   let shapeCount = 0;
+  let shapeOpFails = 0;
+  let frustumOpFails = 0;
   const farDist = radius * SHADOW_PROJECTION_FACTOR;
 
   for (const item of fogItems) {
@@ -59,11 +61,17 @@ export function computeVisibilityPath(
     const transform = MathM.fromItem(item);
     visualPath.transform(...transform);
 
-    lightPath.op(visualPath, CK.PathOp.Difference);
+    if (!lightPath.op(visualPath, CK.PathOp.Difference)) {
+      shapeOpFails++;
+      console.warn(`[Persistence] PathOp.Difference FAILED for shape "${item.name || item.id.slice(0, 8)}"`);
+    }
 
     const frustumPath = buildShadowFrustum(CK, visualPath, origin, farDist);
     if (frustumPath) {
-      lightPath.op(frustumPath, CK.PathOp.Difference);
+      if (!lightPath.op(frustumPath, CK.PathOp.Difference)) {
+        frustumOpFails++;
+        console.warn(`[Persistence] PathOp.Difference FAILED for frustum of "${item.name || item.id.slice(0, 8)}"`);
+      }
       frustumPath.delete();
     }
 
@@ -72,7 +80,10 @@ export function computeVisibilityPath(
     shapeCount++;
   }
 
-  console.log(`[Persistence] CanvasKit visibility: ${shapeCount} fog shapes subtracted`);
+  console.log(
+    `[Persistence] CanvasKit visibility: ${shapeCount} fog shapes subtracted` +
+    ` (shapeOpFails=${shapeOpFails}, frustumOpFails=${frustumOpFails})`
+  );
   return lightPath;
 }
 
