@@ -34,8 +34,6 @@ export interface TrackedToken {
   innerAngle: number;
   /** Token rotation + light rotation offset in degrees */
   lightRotation: number;
-  /** Light zIndex for wall filtering */
-  zIndex: number;
 }
 
 /** Settings stored in scene metadata for persistence state */

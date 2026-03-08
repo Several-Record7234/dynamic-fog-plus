@@ -30,6 +30,13 @@ let cachedDpi = 150;
 let lastResetTimestamp = 0;
 
 /**
+ * Cached wall items from the local scene.
+ * Populated via OBR.scene.local.onChange so we always have the latest walls
+ * without racing the Reconciler's batched Patcher writes.
+ */
+let cachedWalls: Wall[] = [];
+
+/**
  * Initialize the position tracker.
  * Only runs on the GM's client to avoid write conflicts — every connected
  * client runs the background page, but only one should own the persistence
@@ -55,6 +62,25 @@ export async function initPositionTracker(): Promise<void> {
       metadata,
       getPluginId("persistence-reset"),
       0
+    );
+  });
+
+  // Subscribe to local scene changes to cache wall items.
+  // The Reconciler creates local Wall items asynchronously via a batched Patcher,
+  // so querying OBR.scene.local.getItems(isWall) at compute time would race the
+  // Patcher's submitChanges(). Instead we keep a live cache updated by onChange.
+  const unsubLocal = OBR.scene.local.onChange((items) => {
+    cachedWalls = items.filter(isWall);
+    console.debug(
+      `[Persistence] Local walls updated: ${cachedWalls.length} walls`
+    );
+  });
+
+  // Seed the wall cache with whatever exists right now
+  OBR.scene.local.getItems(isWall).then((walls) => {
+    cachedWalls = walls;
+    console.debug(
+      `[Persistence] Initial wall cache: ${cachedWalls.length} walls`
     );
   });
 
@@ -85,6 +111,7 @@ export async function initPositionTracker(): Promise<void> {
   const unsubReady = OBR.scene.onReadyChange((ready) => {
     if (!ready) {
       trackedTokens.clear();
+      cachedWalls = [];
       resetAccumulator();
     } else {
       // Reload settings and DPI on new scene
@@ -106,7 +133,7 @@ export async function initPositionTracker(): Promise<void> {
     }
   });
 
-  unsubscribes = [unsubItems, unsubMeta, unsubReady];
+  unsubscribes = [unsubLocal, unsubItems, unsubMeta, unsubReady];
 }
 
 /** Clean up subscriptions */
@@ -116,6 +143,7 @@ export function destroyPositionTracker(): void {
   }
   unsubscribes = [];
   trackedTokens.clear();
+  cachedWalls = [];
 }
 
 /** Update persistence settings (called from GM controls) */
@@ -182,7 +210,6 @@ async function handleItemsChange(items: Item[]): Promise<void> {
         outerAngle,
         innerAngle,
         lightRotation,
-        zIndex: token.zIndex,
       };
       trackedTokens.set(token.id, newTracked);
       await computeAndAccumulate(token.position, newTracked);
@@ -197,7 +224,6 @@ async function handleItemsChange(items: Item[]): Promise<void> {
         tracked.outerAngle = outerAngle;
         tracked.innerAngle = innerAngle;
         tracked.lightRotation = lightRotation;
-        tracked.zIndex = token.zIndex;
         await computeAndAccumulate(token.position, tracked);
       }
     }
@@ -221,11 +247,12 @@ async function computeAndAccumulate(
 ): Promise<void> {
   const t0 = performance.now();
 
-  // Read wall geometry from local scene
-  const localItems = await OBR.scene.local.getItems(isWall);
+  // Use cached wall geometry (kept in sync by OBR.scene.local.onChange)
+  const wallSegments = wallItemsToSegments(cachedWalls);
 
-  // Convert Wall items to WallSegments in world space
-  const wallSegments = wallItemsToSegments(localItems, tracked.zIndex);
+  console.debug(
+    `[Persistence] Computing visibility: ${cachedWalls.length} wall items -> ${wallSegments.length} segments`
+  );
 
   const t1 = performance.now();
 
@@ -294,16 +321,10 @@ async function computeAndAccumulate(
  * Walls are polylines: each consecutive pair of points is a segment.
  * Wall positions, rotations, and scales must be applied to get world-space coordinates.
  */
-function wallItemsToSegments(
-  walls: Wall[],
-  lightZIndex: number
-): WallSegment[] {
+function wallItemsToSegments(walls: Wall[]): WallSegment[] {
   const segments: WallSegment[] = [];
 
   for (const wall of walls) {
-    // Filter by zIndex: a Light with zIndex N is affected by Walls with zIndex >= N
-    if (wall.zIndex < lightZIndex) continue;
-
     const points = wall.points;
     if (points.length < 2) continue;
 

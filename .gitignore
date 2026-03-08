@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Project-local briefing and config
+.claude/
+Claude.md
+DYNAMIC_FOG_PERSISTENCE_BRIEF.md
