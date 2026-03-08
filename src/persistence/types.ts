@@ -42,11 +42,14 @@ export interface PersistenceSettings {
   enabled: boolean;
   /** Token IDs that are excluded from persistence tracking */
   excludedTokens: string[];
+  /** Fill opacity of the persistence cutout (0 = fully transparent, 1 = fully reveals map) */
+  revealOpacity: number;
 }
 
 export const DEFAULT_PERSISTENCE_SETTINGS: PersistenceSettings = {
   enabled: false,
   excludedTokens: [],
+  revealOpacity: 1,
 };
 
 /** Performance metrics published per computation cycle */

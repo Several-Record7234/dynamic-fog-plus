@@ -13,9 +13,12 @@ let persistenceItemId: string | null = null;
  *
  * @param commands - OBR PathCommands describing the revealed area.
  *   Comes directly from the CanvasKit-based accumulator.
+ * @param opacity - Fill opacity of the cutout (0–1). Controls how much
+ *   of the map is revealed through the persistence shape.
  */
 export async function writePersistenceFogItem(
-  commands: PathCommand[]
+  commands: PathCommand[],
+  opacity: number = 1
 ): Promise<void> {
   if (commands.length === 0) return;
 
@@ -25,6 +28,7 @@ export async function writePersistenceFogItem(
         for (const item of items) {
           if (isPath(item)) {
             item.commands = commands;
+            item.style.fillOpacity = opacity;
           }
         }
       });
@@ -50,6 +54,7 @@ export async function writePersistenceFogItem(
       for (const item of items) {
         if (isPath(item)) {
           item.commands = commands;
+          item.style.fillOpacity = opacity;
         }
       }
     });
@@ -71,7 +76,7 @@ export async function writePersistenceFogItem(
     .name("Persistence Fog")
     .metadata({ [PERSISTENCE_METADATA_KEY]: true })
     .fillColor("#000000")
-    .fillOpacity(1)
+    .fillOpacity(opacity)
     .strokeWidth(0)
     .strokeOpacity(0)
     .strokeColor("#000000")
@@ -79,6 +84,22 @@ export async function writePersistenceFogItem(
 
   await OBR.scene.items.addItems([path]);
   persistenceItemId = path.id;
+}
+
+/** Update the fill opacity of the existing persistence fog item */
+export async function updatePersistenceOpacity(opacity: number): Promise<void> {
+  if (!persistenceItemId) return;
+  try {
+    await OBR.scene.items.updateItems([persistenceItemId], (items) => {
+      for (const item of items) {
+        if (isPath(item)) {
+          item.style.fillOpacity = opacity;
+        }
+      }
+    });
+  } catch {
+    // Item may have been deleted
+  }
 }
 
 /** Remove the persistence fog item from the scene */

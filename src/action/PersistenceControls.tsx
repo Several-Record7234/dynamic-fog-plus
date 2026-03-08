@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import Button from "@mui/material/Button";
+import Slider from "@mui/material/Slider";
 import Stack from "@mui/material/Stack";
 import Switch from "@mui/material/Switch";
 import Typography from "@mui/material/Typography";
@@ -159,6 +160,31 @@ export function PersistenceControls() {
           </Typography>
         }
       />
+
+      {settings.enabled && (
+        <Stack gap={0.5}>
+          <Typography variant="caption" color="text.secondary">
+            Reveal opacity: {Math.round(settings.revealOpacity * 100)}%
+          </Typography>
+          <Slider
+            size="small"
+            min={0}
+            max={1}
+            step={0.05}
+            value={settings.revealOpacity}
+            onChange={(_, value) =>
+              setSettings((s) => ({ ...s, revealOpacity: value as number }))
+            }
+            onChangeCommitted={async (_, value) => {
+              const newSettings = { ...settings, revealOpacity: value as number };
+              setSettings(newSettings);
+              await OBR.scene.setMetadata({
+                [getPluginId("persistence-settings")]: newSettings,
+              });
+            }}
+          />
+        </Stack>
+      )}
 
       {settings.enabled && perf.vertexCount > 0 && (
         <>

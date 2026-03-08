@@ -18,7 +18,7 @@ import {
   resetAccumulator,
   restoreFromPathCommands,
 } from "./polygonAccumulator";
-import { writePersistenceFogItem, removePersistenceFogItem, readPersistenceFogItem } from "./fogWriter";
+import { writePersistenceFogItem, removePersistenceFogItem, readPersistenceFogItem, updatePersistenceOpacity } from "./fogWriter";
 import { drawDebugShapes, removeDebugShapes } from "./debugVisualize";
 
 /** Map of token item IDs to their tracked state */
@@ -108,11 +108,17 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
 
   // Subscribe to scene metadata changes (settings updates and reset signals)
   const unsubMeta = OBR.scene.onMetadataChange((metadata) => {
+    const prevOpacity = settings.revealOpacity;
     settings = getMetadata<PersistenceSettings>(
       metadata,
       getPluginId("persistence-settings"),
       DEFAULT_PERSISTENCE_SETTINGS
     );
+
+    // Apply opacity change immediately to existing fog item
+    if (settings.revealOpacity !== prevOpacity) {
+      updatePersistenceOpacity(settings.revealOpacity);
+    }
 
     // Check for reset signal
     const resetTs = getMetadata<number>(
@@ -325,7 +331,7 @@ async function computeAndAccumulate(
   // Write to the FOG layer
   const commands = getAccumulatedPathCommands();
   if (commands && commands.length > 0) {
-    await writePersistenceFogItem(commands);
+    await writePersistenceFogItem(commands, settings.revealOpacity);
   }
 
   const totalMs = performance.now() - t0;
