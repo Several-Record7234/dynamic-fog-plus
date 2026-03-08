@@ -44,7 +44,7 @@ async function init() {
     if (savedRings) {
       restoreAccumulator(savedRings);
     }
-    await initPositionTracker();
+    await initPositionTracker(CanvasKit);
   }
 
   const sceneReady = await OBR.scene.isReady();

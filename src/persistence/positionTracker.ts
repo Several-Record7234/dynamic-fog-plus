@@ -1,16 +1,15 @@
 import OBR, {
   Item,
-  isWall,
-  Wall,
   Vector2,
   Math2,
 } from "@owlbear-rodeo/sdk";
+import type { CanvasKit } from "canvaskit-wasm";
 import { getPluginId } from "../util/getPluginId";
 import { getMetadata } from "../util/getMetadata";
 import type { LightConfig } from "../types/LightConfig";
-import type { TrackedToken, WallSegment, PersistenceSettings } from "./types";
+import type { TrackedToken, PersistenceSettings } from "./types";
 import { DEFAULT_PERSISTENCE_SETTINGS } from "./types";
-import { computeVisibilityPolygon } from "./visibilityPolygon";
+import { computeVisibilityCanvasKit } from "./visibilityCanvasKit";
 import { accumulatePolygon, getAccumulatedPolygon, getTotalVertexCount, resetAccumulator } from "./polygonAccumulator";
 import { writePersistenceFogItem, removePersistenceFogItem } from "./fogWriter";
 
@@ -29,21 +28,28 @@ let cachedDpi = 150;
 /** Last seen reset timestamp (to detect reset signals from the action UI) */
 let lastResetTimestamp = 0;
 
+/** Cached CanvasKit instance for path boolean operations */
+let canvasKit: CanvasKit | null = null;
+
 /**
- * Cached wall items from the local scene.
- * Populated via OBR.scene.local.onChange so we always have the latest walls
- * without racing the Reconciler's batched Patcher writes.
+ * Cached FOG-layer items from the scene.
+ * Updated via OBR.scene.items.onChange.  These are the filled fog shapes
+ * that the CanvasKit visibility computation subtracts from the light circle.
  */
-let cachedWalls: Wall[] = [];
+let cachedFogItems: Item[] = [];
 
 /**
  * Initialize the position tracker.
  * Only runs on the GM's client to avoid write conflicts — every connected
  * client runs the background page, but only one should own the persistence
  * fog item and accumulated polygon state.
+ *
+ * @param CK - The CanvasKit instance (already loaded by the background page)
  */
-export async function initPositionTracker(): Promise<void> {
+export async function initPositionTracker(CK: CanvasKit): Promise<void> {
   console.log("[Persistence] initPositionTracker called");
+  canvasKit = CK;
+
   const role = await OBR.player.getRole();
   console.log(`[Persistence] Player role: ${role}`);
   if (role !== "GM") return;
@@ -67,29 +73,23 @@ export async function initPositionTracker(): Promise<void> {
     );
   });
 
-  // Subscribe to local scene changes to cache wall items.
-  // The Reconciler creates local Wall items asynchronously via a batched Patcher,
-  // so querying OBR.scene.local.getItems(isWall) at compute time would race the
-  // Patcher's submitChanges(). Instead we keep a live cache updated by onChange.
-  const unsubLocal = OBR.scene.local.onChange((items) => {
-    cachedWalls = items.filter(isWall);
+  // Subscribe to scene item changes.
+  // We cache FOG-layer items separately for the CanvasKit visibility pass
+  // and also detect light-bearing token movement.
+  const unsubItems = OBR.scene.items.onChange((items) => {
+    cachedFogItems = items.filter((i) => i.layer === "FOG");
+    handleItemsChange(items);
+  });
+
+  // Seed the fog item cache
+  OBR.scene.items.getItems().then((items) => {
+    cachedFogItems = items.filter((i) => i.layer === "FOG");
     console.log(
-      `[Persistence] Local walls updated: ${cachedWalls.length} walls`
+      `[Persistence] Initial FOG item cache: ${cachedFogItems.length} items`
     );
   });
 
-  // Seed the wall cache with whatever exists right now
-  OBR.scene.local.getItems(isWall).then((walls) => {
-    cachedWalls = walls;
-    console.log(
-      `[Persistence] Initial wall cache: ${cachedWalls.length} walls`
-    );
-  });
-
-  // Subscribe to scene item changes
-  const unsubItems = OBR.scene.items.onChange(handleItemsChange);
-
-  // Subscribe to scene metadata changes (settings updates and reset signals from action UI)
+  // Subscribe to scene metadata changes (settings updates and reset signals)
   const unsubMeta = OBR.scene.onMetadataChange((metadata) => {
     settings = getMetadata<PersistenceSettings>(
       metadata,
@@ -113,7 +113,7 @@ export async function initPositionTracker(): Promise<void> {
   const unsubReady = OBR.scene.onReadyChange((ready) => {
     if (!ready) {
       trackedTokens.clear();
-      cachedWalls = [];
+      cachedFogItems = [];
       resetAccumulator();
     } else {
       // Reload settings and DPI on new scene
@@ -135,7 +135,7 @@ export async function initPositionTracker(): Promise<void> {
     }
   });
 
-  unsubscribes = [unsubLocal, unsubItems, unsubMeta, unsubReady];
+  unsubscribes = [unsubItems, unsubMeta, unsubReady];
 }
 
 /** Clean up subscriptions */
@@ -145,7 +145,8 @@ export function destroyPositionTracker(): void {
   }
   unsubscribes = [];
   trackedTokens.clear();
-  cachedWalls = [];
+  cachedFogItems = [];
+  canvasKit = null;
 }
 
 /** Update persistence settings (called from GM controls) */
@@ -153,7 +154,6 @@ export function updatePersistenceSettings(
   newSettings: Partial<PersistenceSettings>
 ): void {
   settings = { ...settings, ...newSettings };
-  // Persist to scene metadata
   OBR.scene.setMetadata({
     [getPluginId("persistence-settings")]: settings,
   });
@@ -241,74 +241,59 @@ async function handleItemsChange(items: Item[]): Promise<void> {
 
 /**
  * Compute visibility at a position and accumulate it into the persistence polygon.
- * Instruments each phase with performance.now() and publishes timing data.
+ * Uses CanvasKit path-boolean operations against FOG shapes for robust wall clipping.
  */
 async function computeAndAccumulate(
   position: Vector2,
   tracked: TrackedToken
 ): Promise<void> {
+  if (!canvasKit) {
+    console.warn("[Persistence] CanvasKit not available, skipping computation");
+    return;
+  }
+
   const t0 = performance.now();
 
-  // Use cached wall geometry (kept in sync by OBR.scene.local.onChange)
-  const wallSegments = wallItemsToSegments(cachedWalls);
-
-  console.log(
-    `[Persistence] Computing visibility: ${cachedWalls.length} wall items -> ${wallSegments.length} segments`
-  );
-
-  const t1 = performance.now();
-
-  // Compute visibility polygon
-  const visPolygon = computeVisibilityPolygon(
+  // Compute visibility by subtracting FOG shapes from the light circle
+  const visRings = computeVisibilityCanvasKit(
+    canvasKit,
     position,
     tracked.attenuationRadius,
-    wallSegments,
+    cachedFogItems,
     tracked.outerAngle,
     tracked.lightRotation
   );
 
+  const t1 = performance.now();
+
+  const totalVerts = visRings.reduce((sum, r) => sum + r.length, 0);
+  console.log(
+    `[Persistence] CanvasKit visibility: ${visRings.length} rings, ${totalVerts} total vertices ` +
+    `(${cachedFogItems.length} FOG items, ${(t1 - t0).toFixed(1)}ms)`
+  );
+
+  if (visRings.length === 0) return;
+
+  // Accumulate each ring into the running polygon
+  let lastAccResult: ReturnType<typeof accumulatePolygon> = { status: "ok" };
+  for (const ring of visRings) {
+    if (ring.length < 3) continue;
+    lastAccResult = accumulatePolygon(ring);
+    if (lastAccResult.status === "rejected") break;
+  }
+
   const t2 = performance.now();
 
-  // Diagnostic: check how many vertices are at the boundary radius vs. clipped by walls
-  const radiusSq = tracked.attenuationRadius * tracked.attenuationRadius;
-  const tolerance = radiusSq * 0.02; // 1% tolerance
-  let boundaryCount = 0;
-  for (const p of visPolygon) {
-    const dx = p.x - position.x;
-    const dy = p.y - position.y;
-    const distSq = dx * dx + dy * dy;
-    if (Math.abs(distSq - radiusSq) < tolerance) boundaryCount++;
-  }
-  const clippedCount = visPolygon.length - boundaryCount;
-  console.log(
-    `[Persistence] Visibility polygon: ${visPolygon.length} vertices (${boundaryCount} boundary, ${clippedCount} wall-clipped)`
-  );
-  if (clippedCount === 0) {
-    console.warn(
-      `[Persistence] WARNING: Full circle detected — no wall clipping occurred! ` +
-      `Position: (${position.x.toFixed(0)}, ${position.y.toFixed(0)}), ` +
-      `Radius: ${tracked.attenuationRadius.toFixed(0)}, ` +
-      `Segments in range: check visibilityPolygon.ts`
-    );
-  }
-
-  if (visPolygon.length < 3) return;
-
-  // Accumulate into the running polygon
-  const accResult = accumulatePolygon(visPolygon);
-
-  const t3 = performance.now();
-
   // If rejected, don't write — just publish the warning
-  if (accResult.status === "rejected") {
+  if (lastAccResult.status === "rejected") {
     await OBR.scene.setMetadata({
-      [getPluginId("persistence-vertex-count")]: accResult.vertexCount,
+      [getPluginId("persistence-vertex-count")]: lastAccResult.vertexCount,
       [getPluginId("persistence-perf")]: {
         totalMs: 0,
         visMs: 0,
         unionMs: 0,
-        wallCount: wallSegments.length,
-        vertexCount: accResult.vertexCount,
+        wallCount: cachedFogItems.length,
+        vertexCount: lastAccResult.vertexCount,
         status: "rejected",
       },
     });
@@ -322,9 +307,8 @@ async function computeAndAccumulate(
   }
 
   const totalMs = performance.now() - t0;
-  const visMs = t2 - t1;
-  const unionMs = t3 - t2;
-  const wallCount = wallSegments.length;
+  const visMs = t1 - t0;
+  const unionMs = t2 - t1;
   const vertexCount = getTotalVertexCount();
 
   // Publish metrics to scene metadata for the action UI
@@ -334,78 +318,9 @@ async function computeAndAccumulate(
       totalMs: Math.round(totalMs * 100) / 100,
       visMs: Math.round(visMs * 100) / 100,
       unionMs: Math.round(unionMs * 100) / 100,
-      wallCount,
+      wallCount: cachedFogItems.length,
       vertexCount,
-      status: accResult.status,
+      status: lastAccResult.status,
     },
-  });
-}
-
-/**
- * Convert Wall items from the local scene into flat WallSegment arrays.
- * Walls are polylines: each consecutive pair of points is a segment.
- * Wall positions, rotations, and scales must be applied to get world-space coordinates.
- */
-function wallItemsToSegments(walls: Wall[]): WallSegment[] {
-  const segments: WallSegment[] = [];
-
-  for (const wall of walls) {
-    const points = wall.points;
-    if (points.length < 2) continue;
-
-    // Transform points to world space using wall's position, rotation, scale
-    const worldPoints = transformPoints(
-      points,
-      wall.position,
-      wall.rotation,
-      wall.scale
-    );
-
-    // Convert consecutive point pairs to segments
-    for (let i = 0; i < worldPoints.length - 1; i++) {
-      segments.push({
-        a: worldPoints[i],
-        b: worldPoints[i + 1],
-      });
-    }
-
-    // Close the polyline (walls are closed loops around fog shapes)
-    if (worldPoints.length > 2) {
-      segments.push({
-        a: worldPoints[worldPoints.length - 1],
-        b: worldPoints[0],
-      });
-    }
-  }
-
-  return segments;
-}
-
-/**
- * Transform an array of local-space points to world space
- * using position offset, rotation, and scale.
- */
-function transformPoints(
-  points: Vector2[],
-  position: Vector2,
-  rotationDeg: number,
-  scale: Vector2
-): Vector2[] {
-  const rad = (rotationDeg * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-
-  return points.map((p) => {
-    // Apply scale
-    const sx = p.x * scale.x;
-    const sy = p.y * scale.y;
-    // Apply rotation
-    const rx = sx * cos - sy * sin;
-    const ry = sx * sin + sy * cos;
-    // Apply translation
-    return {
-      x: rx + position.x,
-      y: ry + position.y,
-    };
   });
 }
