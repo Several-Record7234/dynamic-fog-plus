@@ -80,10 +80,11 @@ export function computeVisibilityPath(
     shapeCount++;
   }
 
-  console.log(
-    `[Persistence] CanvasKit visibility: ${shapeCount} fog shapes subtracted` +
-    ` (shapeOpFails=${shapeOpFails}, frustumOpFails=${frustumOpFails})`
-  );
+  if (shapeOpFails > 0 || frustumOpFails > 0) {
+    console.warn(
+      `[Persistence] CanvasKit visibility: ${shapeOpFails} shape + ${frustumOpFails} frustum op failures`
+    );
+  }
   return lightPath;
 }
 

@@ -30,7 +30,7 @@ export async function writePersistenceFogItem(
             item.commands = commands;
             item.style.fillOpacity = opacity;
             item.style.strokeWidth = 0;
-            item.style.strokeOpacity = 0;
+            item.style.strokeOpacity = opacity;
           }
         }
       });
@@ -57,6 +57,7 @@ export async function writePersistenceFogItem(
         if (isPath(item)) {
           item.commands = commands;
           item.style.fillOpacity = opacity;
+          item.style.strokeOpacity = opacity;
         }
       }
     });
@@ -80,7 +81,7 @@ export async function writePersistenceFogItem(
     .fillColor("#000000")
     .fillOpacity(opacity)
     .strokeWidth(0)
-    .strokeOpacity(0)
+    .strokeOpacity(opacity)
     .strokeColor("#000000")
     .build();
 
@@ -96,6 +97,7 @@ export async function updatePersistenceOpacity(opacity: number): Promise<void> {
       for (const item of items) {
         if (isPath(item)) {
           item.style.fillOpacity = opacity;
+          item.style.strokeOpacity = opacity;
         }
       }
     });

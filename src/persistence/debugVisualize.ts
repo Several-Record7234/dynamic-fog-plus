@@ -286,7 +286,6 @@ export async function drawDebugShapes(
 
   if (itemsToAdd.length > 0) {
     await OBR.scene.items.addItems(itemsToAdd);
-    console.log(`[Persistence DEBUG] Added ${itemsToAdd.length} debug shapes`);
   }
 }
 
@@ -323,6 +322,5 @@ export async function removeDebugShapes(): Promise<void> {
   });
   if (items.length > 0) {
     await OBR.scene.items.deleteItems(items.map((i) => i.id));
-    console.log(`[Persistence DEBUG] Removed ${items.length} debug shapes`);
   }
 }

@@ -264,7 +264,6 @@ async function undoReset(): Promise<void> {
       status: "ok" as const,
     },
   });
-  console.log(`[Persistence] Undo reset: restored ${savedCommandsForUndo === null ? vertexCount : 0} vertices`);
 }
 
 /** Discard saved undo snapshot (called when undo window expires) */
@@ -407,11 +406,6 @@ async function computeAndAccumulate(
   const visMs = t1 - t0;
   const unionMs = t2 - t1;
   const vertexCount = getTotalVertexCount();
-
-  console.log(
-    `[Persistence] Cycle: vis=${visMs.toFixed(1)}ms union=${unionMs.toFixed(1)}ms ` +
-    `total=${totalMs.toFixed(1)}ms verts=${vertexCount} status=${accResult.status}`
-  );
 
   await OBR.scene.setMetadata({
     [getPluginId("persistence-vertex-count")]: vertexCount,
