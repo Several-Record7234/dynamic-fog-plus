@@ -38,13 +38,6 @@ const SIMPLIFY_INTERVAL = 10;
 const TOLERANCE_SOFT = 1.5;
 const TOLERANCE_HARD = 4;
 
-/**
- * Outward dilation (in scene pixels) applied when exporting the path.
- * Compensates for the inward shrinkage caused by Douglas-Peucker
- * simplification on convex boundaries, which otherwise leaves a visible
- * bright outline at the fog cutout edge (especially at sub-100% opacity).
- */
-const EXPORT_DILATION_PX = 2;
 
 /** Result of an accumulate call, for the caller to react to */
 export type AccumulateResult =
@@ -98,29 +91,10 @@ export function accumulateVisibilityPath(visPath: SkPath): AccumulateResult {
 
 /**
  * Get the accumulated path as OBR PathCommands, ready for the fog writer.
- * Applies a small outward dilation to compensate for simplification shrinkage.
  * Returns null if nothing has been accumulated.
  */
 export function getAccumulatedPathCommands(): PathCommand[] | null {
-  if (!accumulated || !ck) return null;
-
-  // Dilate: stroke the path outward and union with the original fill.
-  // stroke() width is centered on the path edge, so total outward reach = width/2.
-  const strokePath = accumulated.copy().stroke({
-    width: EXPORT_DILATION_PX * 2,
-    join: ck.StrokeJoin.Round,
-    cap: ck.StrokeCap.Round,
-  });
-
-  if (strokePath) {
-    const dilated = accumulated.copy();
-    dilated.op(strokePath, ck.PathOp.Union);
-    strokePath.delete();
-    const commands = PathHelpers.skPathToPathCommands(dilated);
-    dilated.delete();
-    return commands;
-  }
-
+  if (!accumulated) return null;
   return PathHelpers.skPathToPathCommands(accumulated);
 }
 

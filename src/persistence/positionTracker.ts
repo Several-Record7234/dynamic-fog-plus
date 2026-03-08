@@ -352,10 +352,14 @@ async function computeAndAccumulate(
 
   const t0 = performance.now();
 
+  // Scale radius to 95% so persistence stays inside the light's feathered edge,
+  // avoiding a hard cutout boundary that extends beyond the visible light.
+  const persistenceRadius = tracked.attenuationRadius * 0.95;
+
   const visPath = computeVisibilityPath(
     canvasKit,
     position,
-    tracked.attenuationRadius,
+    persistenceRadius,
     cachedFogItems,
     tracked.outerAngle,
     tracked.lightRotation
