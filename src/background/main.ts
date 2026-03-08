@@ -36,16 +36,30 @@ async function init() {
   reconciler.register(new WallReactor(reconciler));
   initOverlay(reconciler);
 
-  // Restore persistence state from existing fog item (if any)
-  const savedRings = await readPersistenceFogItem();
-  if (savedRings) {
-    restoreAccumulator(savedRings);
+  // Defer persistence init until a scene is loaded.
+  // OBR.onReady fires when the SDK connects, but scene APIs throw
+  // "No scene found" if no scene is loaded yet.
+  async function initPersistence() {
+    const savedRings = await readPersistenceFogItem();
+    if (savedRings) {
+      restoreAccumulator(savedRings);
+    }
+    await initPositionTracker();
   }
 
-  // Start persistence position tracking
-  initPositionTracker().catch((err) =>
-    console.error("[Persistence] Failed to initialize:", err)
-  );
+  const sceneReady = await OBR.scene.isReady();
+  if (sceneReady) {
+    initPersistence().catch((err) =>
+      console.error("[Persistence] Failed to initialize:", err)
+    );
+  }
+  OBR.scene.onReadyChange((ready) => {
+    if (ready) {
+      initPersistence().catch((err) =>
+        console.error("[Persistence] Failed to initialize:", err)
+      );
+    }
+  });
 }
 
 init();
