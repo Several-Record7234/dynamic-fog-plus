@@ -98,6 +98,57 @@ export async function drawDebugShapes(
     const commands = PathHelpers.skPathToPathCommands(visualPath);
     const contours = PathHelpers.commandsToPolylines(CK, commands, 15);
 
+    // Diagnostic: log item position vs. first vertex of visual boundary
+    if (contours.length > 0 && contours[0].length > 0) {
+      const firstVert = contours[0][0];
+      console.log(
+        `[DEBUG VIS] Shape #${colorIdx} "${item.name || item.id.slice(0, 8)}"` +
+        ` pos=(${item.position.x.toFixed(1)}, ${item.position.y.toFixed(1)})` +
+        ` firstVert=(${firstVert.x.toFixed(1)}, ${firstVert.y.toFixed(1)})` +
+        ` transform=[${transform.map(v => v.toFixed(2)).join(", ")}]` +
+        ` contours=${contours.length} verts=${contours.map(c => c.length).join(",")}`
+      );
+    }
+
+    const color = COLORS[colorIdx % COLORS.length];
+
+    // Draw the visual boundary itself (bright outline, no fill)
+    // so we can see if it aligns with the actual fog shape on screen
+    const boundaryCommands: PathCommand[] = [];
+    for (const poly of contours) {
+      if (poly.length < 3) continue;
+      boundaryCommands.push([Command.MOVE, poly[0].x, poly[0].y]);
+      for (let i = 1; i < poly.length; i++) {
+        boundaryCommands.push([Command.LINE, poly[i].x, poly[i].y]);
+      }
+      boundaryCommands.push([Command.CLOSE]);
+    }
+    if (boundaryCommands.length > 0) {
+      itemsToAdd.push(
+        buildPath()
+          .commands(boundaryCommands)
+          .layer("DRAWING")
+          .fillColor(color)
+          .fillOpacity(0)
+          .strokeColor(color)
+          .strokeWidth(3)
+          .strokeOpacity(1)
+          .name(`DEBUG: Visual boundary #${colorIdx} (${item.name || item.id.slice(0, 8)})`)
+          .metadata({
+            [DEBUG_METADATA_KEY]: true,
+            [getPluginId("debug-info")]: {
+              kind: "visual-boundary",
+              shapeIndex: colorIdx,
+              sourceItemId: item.id,
+              sourceItemName: item.name,
+              contourCount: contours.length,
+              vertexCounts: contours.map(c => c.length),
+            },
+          })
+          .build()
+      );
+    }
+
     // Build edge quads for visualization
     const quadCommands: PathCommand[] = [];
     const allVerts: { verts: Vector2[]; projected: Vector2[] }[] = [];
@@ -131,8 +182,6 @@ export async function drawDebugShapes(
         quadCommands.push([Command.CLOSE]);
       }
     }
-
-    const color = COLORS[colorIdx % COLORS.length];
 
     // Raw quads (faint)
     if (quadCommands.length > 0) {
