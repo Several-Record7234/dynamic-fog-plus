@@ -269,6 +269,29 @@ async function computeAndAccumulate(
 
   const t2 = performance.now();
 
+  // Diagnostic: check how many vertices are at the boundary radius vs. clipped by walls
+  const radiusSq = tracked.attenuationRadius * tracked.attenuationRadius;
+  const tolerance = radiusSq * 0.02; // 1% tolerance
+  let boundaryCount = 0;
+  for (const p of visPolygon) {
+    const dx = p.x - position.x;
+    const dy = p.y - position.y;
+    const distSq = dx * dx + dy * dy;
+    if (Math.abs(distSq - radiusSq) < tolerance) boundaryCount++;
+  }
+  const clippedCount = visPolygon.length - boundaryCount;
+  console.log(
+    `[Persistence] Visibility polygon: ${visPolygon.length} vertices (${boundaryCount} boundary, ${clippedCount} wall-clipped)`
+  );
+  if (clippedCount === 0) {
+    console.warn(
+      `[Persistence] WARNING: Full circle detected — no wall clipping occurred! ` +
+      `Position: (${position.x.toFixed(0)}, ${position.y.toFixed(0)}), ` +
+      `Radius: ${tracked.attenuationRadius.toFixed(0)}, ` +
+      `Segments in range: check visibilityPolygon.ts`
+    );
+  }
+
   if (visPolygon.length < 3) return;
 
   // Accumulate into the running polygon
