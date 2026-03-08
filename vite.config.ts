@@ -11,6 +11,7 @@ export default defineConfig({
       input: {
         menu: resolve(__dirname, "menu.html"),
         background: resolve(__dirname, "background.html"),
+        action: resolve(__dirname, "action.html"),
       },
     },
   },

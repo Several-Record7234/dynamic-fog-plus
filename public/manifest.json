@@ -1,10 +1,17 @@
 {
-  "name": "Dynamic Fog",
-  "version": "1.1.0",
+  "name": "Dynamic Fog+",
+  "version": "2.0.0",
   "manifest_version": 1,
   "author": "Owlbear Rodeo",
   "homepage_url": "https://extensions.owlbear.rodeo/dynamic-fog",
   "icon": "/logo.png",
-  "description": "Add walls, doors and lights for a simple dynamic fog experience",
-  "background_url": "/background.html"
+  "description": "Dynamic fog with walls, doors, lights, and fog of war persistence",
+  "background_url": "/background.html",
+  "action": {
+    "title": "Fog Persistence",
+    "icon": "/logo.png",
+    "popover": "/action.html",
+    "height": 200,
+    "width": 300
+  }
 }

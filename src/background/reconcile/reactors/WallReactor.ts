@@ -4,6 +4,7 @@ import { Item } from "@owlbear-rodeo/sdk";
 import { isDrawing } from "../../../types/Drawing";
 import { DoorReactor } from "./DoorReactor";
 import { WallActor } from "../actors/WallActor";
+import { PERSISTENCE_METADATA_KEY } from "../../../persistence/fogWriter";
 
 export class WallReactor extends Reactor {
   private door: DoorReactor;
@@ -17,6 +18,10 @@ export class WallReactor extends Reactor {
   }
 
   filter(item: Item): boolean {
+    // Skip wall generation for persistence cutout shapes
+    if (PERSISTENCE_METADATA_KEY in item.metadata) {
+      return false;
+    }
     return item.layer === "FOG" && isDrawing(item);
   }
 

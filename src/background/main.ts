@@ -10,6 +10,9 @@ import { DoorReactor } from "./reconcile/reactors/DoorReactor";
 import { WallReactor } from "./reconcile/reactors/WallReactor";
 import { initOverlay } from "./overlay";
 import { createLineMode } from "./createLineMode";
+import { initPositionTracker, destroyPositionTracker } from "../persistence/positionTracker";
+import { restoreAccumulator } from "../persistence/polygonAccumulator";
+import { readPersistenceFogItem } from "../persistence/fogWriter";
 
 async function waitUntilOBRReady() {
   return new Promise<void>((resolve) => {
@@ -32,6 +35,15 @@ async function init() {
   reconciler.register(new DoorReactor(reconciler));
   reconciler.register(new WallReactor(reconciler));
   initOverlay(reconciler);
+
+  // Restore persistence state from existing fog item (if any)
+  const savedRings = await readPersistenceFogItem();
+  if (savedRings) {
+    restoreAccumulator(savedRings);
+  }
+
+  // Start persistence position tracking
+  initPositionTracker();
 }
 
 init();
@@ -41,5 +53,6 @@ if (import.meta.hot) {
   import.meta.hot.accept();
   import.meta.hot.dispose(() => {
     reconciler?.delete();
+    destroyPositionTracker();
   });
 }
