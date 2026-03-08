@@ -98,18 +98,6 @@ export async function drawDebugShapes(
     const commands = PathHelpers.skPathToPathCommands(visualPath);
     const contours = PathHelpers.commandsToPolylines(CK, commands, 15);
 
-    // Diagnostic: log item position vs. first vertex of visual boundary
-    if (contours.length > 0 && contours[0].length > 0) {
-      const firstVert = contours[0][0];
-      console.log(
-        `[DEBUG VIS] Shape #${colorIdx} "${item.name || item.id.slice(0, 8)}"` +
-        ` pos=(${item.position.x.toFixed(1)}, ${item.position.y.toFixed(1)})` +
-        ` firstVert=(${firstVert.x.toFixed(1)}, ${firstVert.y.toFixed(1)})` +
-        ` transform=[${transform.map(v => v.toFixed(2)).join(", ")}]` +
-        ` contours=${contours.length} verts=${contours.map(c => c.length).join(",")}`
-      );
-    }
-
     const color = COLORS[colorIdx % COLORS.length];
 
     // Draw the visual boundary itself (bright outline, no fill)
