@@ -36,6 +36,12 @@ let cachedDpi = 150;
 /** Last seen reset timestamp (to detect reset signals from the action UI) */
 let lastResetTimestamp = 0;
 
+/** Last seen undo-reset timestamp */
+let lastUndoResetTimestamp = 0;
+
+/** Saved path commands for undo (cleared after expiry or undo) */
+let savedCommandsForUndo: import("@owlbear-rodeo/sdk").PathCommand[] | null = null;
+
 /** Whether debug visualization is active */
 let debugVis = false;
 
@@ -90,6 +96,11 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
       getPluginId("persistence-reset"),
       0
     );
+    lastUndoResetTimestamp = getMetadata<number>(
+      metadata,
+      getPluginId("persistence-undo-reset"),
+      0
+    );
   });
 
   // Subscribe to scene item changes
@@ -131,6 +142,27 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
       resetPersistence();
     }
 
+    // Check for undo-reset signal
+    const undoResetTs = getMetadata<number>(
+      metadata,
+      getPluginId("persistence-undo-reset"),
+      0
+    );
+    if (undoResetTs > lastUndoResetTimestamp) {
+      lastUndoResetTimestamp = undoResetTs;
+      undoReset();
+    }
+
+    // Check for discard-undo signal (undo window expired)
+    const discardTs = getMetadata<number>(
+      metadata,
+      getPluginId("persistence-discard-undo"),
+      0
+    );
+    if (discardTs > 0) {
+      discardUndoSnapshot();
+    }
+
     // Check for debug vis toggle
     const newDebug = getMetadata<boolean>(
       metadata,
@@ -163,6 +195,11 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
         lastResetTimestamp = getMetadata<number>(
           metadata,
           getPluginId("persistence-reset"),
+          0
+        );
+        lastUndoResetTimestamp = getMetadata<number>(
+          metadata,
+          getPluginId("persistence-undo-reset"),
           0
         );
       });
@@ -199,11 +236,40 @@ export function getPersistenceSettings(): PersistenceSettings {
   return { ...settings };
 }
 
-/** Reset all accumulated persistence data */
+/** Reset all accumulated persistence data, saving a snapshot for undo */
 export async function resetPersistence(): Promise<void> {
+  // Snapshot current commands before clearing, so undo can restore them
+  savedCommandsForUndo = getAccumulatedPathCommands();
   resetAccumulator();
   trackedTokens.clear();
   await removePersistenceFogItem();
+}
+
+/** Undo the most recent reset by restoring the saved snapshot */
+async function undoReset(): Promise<void> {
+  if (!savedCommandsForUndo || savedCommandsForUndo.length === 0) return;
+  restoreFromPathCommands(savedCommandsForUndo);
+  await writePersistenceFogItem(savedCommandsForUndo, settings.revealOpacity);
+  savedCommandsForUndo = null;
+  // Publish updated perf/vertex count
+  const vertexCount = getTotalVertexCount();
+  await OBR.scene.setMetadata({
+    [getPluginId("persistence-vertex-count")]: vertexCount,
+    [getPluginId("persistence-perf")]: {
+      totalMs: 0,
+      visMs: 0,
+      unionMs: 0,
+      wallCount: cachedFogItems.length,
+      vertexCount,
+      status: "ok" as const,
+    },
+  });
+  console.log(`[Persistence] Undo reset: restored ${savedCommandsForUndo === null ? vertexCount : 0} vertices`);
+}
+
+/** Discard saved undo snapshot (called when undo window expires) */
+function discardUndoSnapshot(): void {
+  savedCommandsForUndo = null;
 }
 
 /**

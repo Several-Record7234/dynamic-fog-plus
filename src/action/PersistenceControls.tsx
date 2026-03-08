@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Dialog from "@mui/material/Dialog";
-import DialogActions from "@mui/material/DialogActions";
-import DialogContent from "@mui/material/DialogContent";
-import DialogContentText from "@mui/material/DialogContentText";
-import DialogTitle from "@mui/material/DialogTitle";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import Stack from "@mui/material/Stack";
@@ -27,6 +22,9 @@ const OPACITY_OPTIONS = Array.from({ length: 19 }, (_, i) => {
   const value = (i + 2) * 0.05; // 0.10 to 1.00
   return { value, label: `${Math.round(value * 100)}%` };
 });
+
+/** How long the "Undo Reset" button stays available (seconds) */
+const UNDO_WINDOW_SECONDS = 15;
 
 /** Easter egg: number of clicks within the time window to toggle debug */
 const DEBUG_CLICK_COUNT = 5;
@@ -51,7 +49,9 @@ export function PersistenceControls() {
   const [perf, setPerf] = useState<PersistencePerf>(DEFAULT_PERSISTENCE_PERF);
   const [role, setRole] = useState<"GM" | "PLAYER">("PLAYER");
   const [debugVis, setDebugVis] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [undoAvailable, setUndoAvailable] = useState(false);
+  const [undoSecondsLeft, setUndoSecondsLeft] = useState(0);
+  const undoTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Auto-resize popover to fit content
   const contentRef = useRef<HTMLDivElement>(null);
@@ -143,12 +143,50 @@ export function PersistenceControls() {
     });
   }
 
-  async function handleResetConfirmed() {
-    setConfirmOpen(false);
+  function clearUndoTimer() {
+    if (undoTimerRef.current) {
+      clearInterval(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+  }
+
+  // Clean up timer on unmount
+  useEffect(() => clearUndoTimer, []);
+
+  async function handleReset() {
     await OBR.scene.setMetadata({
       [getPluginId("persistence-reset")]: Date.now(),
     });
     setPerf(DEFAULT_PERSISTENCE_PERF);
+
+    // Start undo countdown
+    setUndoAvailable(true);
+    setUndoSecondsLeft(UNDO_WINDOW_SECONDS);
+    clearUndoTimer();
+    const deadline = Date.now() + UNDO_WINDOW_SECONDS * 1000;
+    undoTimerRef.current = setInterval(() => {
+      const remaining = Math.ceil((deadline - Date.now()) / 1000);
+      if (remaining <= 0) {
+        clearUndoTimer();
+        setUndoAvailable(false);
+        setUndoSecondsLeft(0);
+        // Signal background to discard the snapshot
+        OBR.scene.setMetadata({
+          [getPluginId("persistence-discard-undo")]: Date.now(),
+        });
+      } else {
+        setUndoSecondsLeft(remaining);
+      }
+    }, 1000);
+  }
+
+  async function handleUndoReset() {
+    clearUndoTimer();
+    setUndoAvailable(false);
+    setUndoSecondsLeft(0);
+    await OBR.scene.setMetadata({
+      [getPluginId("persistence-undo-reset")]: Date.now(),
+    });
   }
 
   const handleTitleClick = useCallback(() => {
@@ -196,6 +234,11 @@ export function PersistenceControls() {
         sx={{ cursor: "default", userSelect: "none" }}
       >
         Dynamic Fog Plus
+        {debugVis && (
+          <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+            Click here 5x to cancel debug
+          </Typography>
+        )}
       </Typography>
 
       {/* Fog persistence toggle */}
@@ -228,7 +271,7 @@ export function PersistenceControls() {
               size="small"
               value={settings.revealOpacity}
               onChange={(e) => handleOpacityChange(e.target.value as number)}
-              sx={{ minWidth: 80 }}
+              sx={{ minWidth: 72, "& .MuiSelect-select": { py: "4px" } }}
             >
               {OPACITY_OPTIONS.map((opt) => (
                 <MenuItem key={opt.value} value={opt.value}>
@@ -238,17 +281,29 @@ export function PersistenceControls() {
             </Select>
           </Stack>
 
-          {/* Reset button */}
-          <Button
-            size="small"
-            variant="outlined"
-            color="error"
-            onClick={() => setConfirmOpen(true)}
-            disabled={perf.vertexCount === 0}
-            fullWidth
-          >
-            Reset Explored Areas
-          </Button>
+          {/* Reset / Undo button */}
+          {undoAvailable ? (
+            <Button
+              size="small"
+              variant="outlined"
+              color="warning"
+              onClick={handleUndoReset}
+              fullWidth
+            >
+              Undo Reset ({undoSecondsLeft}s)
+            </Button>
+          ) : (
+            <Button
+              size="small"
+              variant="outlined"
+              color="error"
+              onClick={handleReset}
+              disabled={perf.vertexCount === 0}
+              fullWidth
+            >
+              Reset Explored Areas
+            </Button>
+          )}
 
           {/* Stats row */}
           {perf.vertexCount > 0 && (
@@ -274,22 +329,6 @@ export function PersistenceControls() {
         </>
       )}
 
-      {/* Reset confirmation dialog */}
-      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
-        <DialogTitle>Reset Explored Areas?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            This will permanently delete all accumulated fog persistence data
-            for this scene. This action cannot be undone.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setConfirmOpen(false)}>Cancel</Button>
-          <Button onClick={handleResetConfirmed} color="error" autoFocus>
-            Reset
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Stack>
   );
 }
