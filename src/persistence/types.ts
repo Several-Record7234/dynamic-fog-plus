@@ -49,7 +49,7 @@ export interface PersistenceSettings {
 export const DEFAULT_PERSISTENCE_SETTINGS: PersistenceSettings = {
   enabled: false,
   excludedTokens: [],
-  revealOpacity: 1,
+  revealOpacity: 0.5,
 };
 
 /** Performance metrics published per computation cycle */

@@ -223,6 +223,9 @@ async function handleItemsChange(items: Item[]): Promise<void> {
 
     if (settings.excludedTokens.includes(token.id)) continue;
 
+    // Skip hidden tokens — their light is disabled while hidden
+    if (!token.visible) continue;
+
     const config = getMetadata<LightConfig>(
       token.metadata,
       getPluginId("light"),

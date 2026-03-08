@@ -29,6 +29,8 @@ export async function writePersistenceFogItem(
           if (isPath(item)) {
             item.commands = commands;
             item.style.fillOpacity = opacity;
+            item.style.strokeWidth = 0;
+            item.style.strokeOpacity = 0;
           }
         }
       });

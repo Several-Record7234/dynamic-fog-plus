@@ -1,12 +1,17 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import Slider from "@mui/material/Slider";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogContentText from "@mui/material/DialogContentText";
+import DialogTitle from "@mui/material/DialogTitle";
+import MenuItem from "@mui/material/MenuItem";
+import Select from "@mui/material/Select";
 import Stack from "@mui/material/Stack";
 import Switch from "@mui/material/Switch";
 import Typography from "@mui/material/Typography";
 import FormControlLabel from "@mui/material/FormControlLabel";
-import Divider from "@mui/material/Divider";
-import Alert from "@mui/material/Alert";
 import OBR from "@owlbear-rodeo/sdk";
 import { getPluginId } from "../util/getPluginId";
 import { getMetadata } from "../util/getMetadata";
@@ -14,16 +19,30 @@ import type { PersistenceSettings, PersistencePerf } from "../persistence/types"
 import { DEFAULT_PERSISTENCE_SETTINGS, DEFAULT_PERSISTENCE_PERF } from "../persistence/types";
 
 /** Computation time thresholds (ms) */
-const WARN_TOTAL_MS = 16; // One frame at 60fps
-const CRITICAL_TOTAL_MS = 50; // Noticeable stutter
+const WARN_TOTAL_MS = 16;
+const CRITICAL_TOTAL_MS = 50;
 
-/** Status messages for accumulator strategies */
-const STATUS_MESSAGES: Record<PersistencePerf["status"], string | null> = {
-  ok: null,
-  simplified: "Auto-simplified to reduce vertex count",
-  region_split: "New exploration stored as separate region (high vertex count)",
-  rejected: "Vertex limit reached — exploration paused. Reset to continue.",
-};
+/** Opacity dropdown options: 10% to 100% in 5% steps */
+const OPACITY_OPTIONS = Array.from({ length: 19 }, (_, i) => {
+  const value = (i + 2) * 0.05; // 0.10 to 1.00
+  return { value, label: `${Math.round(value * 100)}%` };
+});
+
+/** Easter egg: number of clicks within the time window to toggle debug */
+const DEBUG_CLICK_COUNT = 5;
+const DEBUG_CLICK_WINDOW_MS = 2000;
+
+/** Warning triangle SVG icon */
+function WarningIcon({ color }: { color: string }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{ flexShrink: 0 }}>
+      <path
+        d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"
+        fill={color}
+      />
+    </svg>
+  );
+}
 
 export function PersistenceControls() {
   const [settings, setSettings] = useState<PersistenceSettings>(
@@ -32,6 +51,10 @@ export function PersistenceControls() {
   const [perf, setPerf] = useState<PersistencePerf>(DEFAULT_PERSISTENCE_PERF);
   const [role, setRole] = useState<"GM" | "PLAYER">("PLAYER");
   const [debugVis, setDebugVis] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Easter egg: track title clicks for debug toggle
+  const clickTimesRef = useRef<number[]>([]);
 
   useEffect(() => {
     let mounted = true;
@@ -54,6 +77,13 @@ export function PersistenceControls() {
             metadata,
             getPluginId("persistence-perf"),
             DEFAULT_PERSISTENCE_PERF
+          )
+        );
+        setDebugVis(
+          getMetadata<boolean>(
+            metadata,
+            getPluginId("persistence-debug"),
+            false
           )
         );
       }
@@ -93,19 +123,39 @@ export function PersistenceControls() {
     });
   }
 
-  async function handleReset() {
+  async function handleOpacityChange(value: number) {
+    const newSettings = { ...settings, revealOpacity: value };
+    setSettings(newSettings);
+    await OBR.scene.setMetadata({
+      [getPluginId("persistence-settings")]: newSettings,
+    });
+  }
+
+  async function handleResetConfirmed() {
+    setConfirmOpen(false);
     await OBR.scene.setMetadata({
       [getPluginId("persistence-reset")]: Date.now(),
     });
     setPerf(DEFAULT_PERSISTENCE_PERF);
   }
 
-  async function handleDebugToggle(enabled: boolean) {
-    setDebugVis(enabled);
-    await OBR.scene.setMetadata({
-      [getPluginId("persistence-debug")]: enabled,
-    });
-  }
+  const handleTitleClick = useCallback(() => {
+    const now = Date.now();
+    const times = clickTimesRef.current;
+    times.push(now);
+    // Keep only clicks within the time window
+    while (times.length > 0 && now - times[0] > DEBUG_CLICK_WINDOW_MS) {
+      times.shift();
+    }
+    if (times.length >= DEBUG_CLICK_COUNT) {
+      times.length = 0;
+      const newDebug = !debugVis;
+      setDebugVis(newDebug);
+      OBR.scene.setMetadata({
+        [getPluginId("persistence-debug")]: newDebug,
+      });
+    }
+  }, [debugVis]);
 
   if (role !== "GM") {
     return (
@@ -117,35 +167,26 @@ export function PersistenceControls() {
     );
   }
 
-  // Determine alert severity from both timing and accumulator status
-  const statusMessage = STATUS_MESSAGES[perf.status];
-  const isRejected = perf.status === "rejected";
-  const timingWarn =
+  // Timing indicator
+  const timingColor =
     perf.totalMs >= CRITICAL_TOTAL_MS
-      ? "error"
+      ? "#f44336" // red
       : perf.totalMs >= WARN_TOTAL_MS
-        ? "warning"
-        : null;
-
-  const alertSeverity = isRejected
-    ? "error" as const
-    : perf.status === "region_split"
-      ? "warning" as const
-      : timingWarn;
-
-  const alertMessage = isRejected
-    ? statusMessage
-    : perf.status === "region_split"
-      ? statusMessage
-      : timingWarn === "error"
-        ? `Computation took ${perf.totalMs}ms — exceeds frame budget. Consider resetting.`
-        : timingWarn === "warning"
-          ? `Computation took ${perf.totalMs}ms — approaching frame budget.`
-          : statusMessage;
+        ? "#ff9800" // amber
+        : undefined;
 
   return (
     <Stack px={2} py={1} gap={1}>
-      <Typography variant="subtitle2">Fog Persistence</Typography>
+      {/* Header */}
+      <Typography
+        variant="subtitle2"
+        onClick={handleTitleClick}
+        sx={{ cursor: "default", userSelect: "none" }}
+      >
+        Dynamic Fog Plus
+      </Typography>
+
+      {/* Fog persistence toggle */}
       <FormControlLabel
         control={
           <Switch
@@ -156,87 +197,87 @@ export function PersistenceControls() {
         }
         label={
           <Typography variant="body2">
-            {settings.enabled ? "Enabled" : "Disabled"}
+            Fog persistence{" "}
+            <Typography component="span" variant="body2" color="text.secondary">
+              {settings.enabled ? "(on)" : "(off)"}
+            </Typography>
           </Typography>
         }
       />
 
       {settings.enabled && (
-        <Stack gap={0.5}>
-          <Typography variant="caption" color="text.secondary">
-            Reveal opacity: {Math.round(settings.revealOpacity * 100)}%
-          </Typography>
-          <Slider
-            size="small"
-            min={0}
-            max={1}
-            step={0.05}
-            value={settings.revealOpacity}
-            onChange={(_, value) =>
-              setSettings((s) => ({ ...s, revealOpacity: value as number }))
-            }
-            onChangeCommitted={async (_, value) => {
-              const newSettings = { ...settings, revealOpacity: value as number };
-              setSettings(newSettings);
-              await OBR.scene.setMetadata({
-                [getPluginId("persistence-settings")]: newSettings,
-              });
-            }}
-          />
-        </Stack>
-      )}
-
-      {settings.enabled && perf.vertexCount > 0 && (
         <>
-          <Divider />
-          <Stack gap={0.25}>
-            <Typography variant="caption" color="text.secondary">
-              Vertices: {perf.vertexCount}
-              {" | "}Walls: {perf.wallCount}
+          {/* Persistence opacity dropdown */}
+          <Stack direction="row" alignItems="center" gap={1}>
+            <Typography variant="body2" sx={{ whiteSpace: "nowrap" }}>
+              Persistence opacity
             </Typography>
-            {perf.totalMs > 0 && (
-              <Typography variant="caption" color="text.secondary">
-                Last cycle: {perf.totalMs}ms
-                {" ("}vis {perf.visMs}ms + union {perf.unionMs}ms{")"}
-              </Typography>
-            )}
+            <Select
+              size="small"
+              value={settings.revealOpacity}
+              onChange={(e) => handleOpacityChange(e.target.value as number)}
+              sx={{ minWidth: 80 }}
+            >
+              {OPACITY_OPTIONS.map((opt) => (
+                <MenuItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </MenuItem>
+              ))}
+            </Select>
           </Stack>
 
-          {alertSeverity && alertMessage && (
-            <Alert severity={alertSeverity} sx={{ py: 0, "& .MuiAlert-message": { py: 0.5 } }}>
-              <Typography variant="caption">{alertMessage}</Typography>
-            </Alert>
+          {/* Reset button */}
+          <Button
+            size="small"
+            variant="outlined"
+            color="error"
+            onClick={() => setConfirmOpen(true)}
+            disabled={perf.vertexCount === 0}
+            fullWidth
+          >
+            Reset Explored Areas
+          </Button>
+
+          {/* Stats row */}
+          {perf.vertexCount > 0 && (
+            <Stack direction="row" alignItems="center" gap={0.5}>
+              <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+                Vertices: {perf.vertexCount}
+                {" | "}Walls: {perf.wallCount}
+                {perf.totalMs > 0 && (
+                  <>
+                    {" | "}
+                    <Box
+                      component="span"
+                      sx={timingColor ? { color: timingColor, fontWeight: 600 } : undefined}
+                    >
+                      {perf.totalMs}ms
+                    </Box>
+                  </>
+                )}
+              </Typography>
+              {timingColor && <WarningIcon color={timingColor} />}
+            </Stack>
           )}
         </>
       )}
 
-      <Button
-        size="small"
-        variant="outlined"
-        color="error"
-        onClick={handleReset}
-        disabled={perf.vertexCount === 0}
-        fullWidth
-      >
-        Reset Explored Areas
-      </Button>
-
-      {settings.enabled && (
-        <FormControlLabel
-          control={
-            <Switch
-              checked={debugVis}
-              onChange={(_, checked) => handleDebugToggle(checked)}
-              size="small"
-            />
-          }
-          label={
-            <Typography variant="caption" color="text.secondary">
-              Debug: show shadow frustums
-            </Typography>
-          }
-        />
-      )}
+      {/* Reset confirmation dialog */}
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
+        <DialogTitle>Reset Explored Areas?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This will permanently delete all accumulated fog persistence data
+            for this scene. This action cannot be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)}>Cancel</Button>
+          <Button onClick={handleResetConfirmed} color="error" autoFocus>
+            Reset
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Stack>
   );
 }
