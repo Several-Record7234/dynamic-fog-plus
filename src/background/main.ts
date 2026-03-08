@@ -43,7 +43,9 @@ async function init() {
   }
 
   // Start persistence position tracking
-  initPositionTracker();
+  initPositionTracker().catch((err) =>
+    console.error("[Persistence] Failed to initialize:", err)
+  );
 }
 
 init();

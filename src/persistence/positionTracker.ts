@@ -43,7 +43,9 @@ let cachedWalls: Wall[] = [];
  * fog item and accumulated polygon state.
  */
 export async function initPositionTracker(): Promise<void> {
+  console.log("[Persistence] initPositionTracker called");
   const role = await OBR.player.getRole();
+  console.log(`[Persistence] Player role: ${role}`);
   if (role !== "GM") return;
 
   // Get initial DPI
@@ -71,7 +73,7 @@ export async function initPositionTracker(): Promise<void> {
   // Patcher's submitChanges(). Instead we keep a live cache updated by onChange.
   const unsubLocal = OBR.scene.local.onChange((items) => {
     cachedWalls = items.filter(isWall);
-    console.debug(
+    console.log(
       `[Persistence] Local walls updated: ${cachedWalls.length} walls`
     );
   });
@@ -79,7 +81,7 @@ export async function initPositionTracker(): Promise<void> {
   // Seed the wall cache with whatever exists right now
   OBR.scene.local.getItems(isWall).then((walls) => {
     cachedWalls = walls;
-    console.debug(
+    console.log(
       `[Persistence] Initial wall cache: ${cachedWalls.length} walls`
     );
   });
@@ -250,7 +252,7 @@ async function computeAndAccumulate(
   // Use cached wall geometry (kept in sync by OBR.scene.local.onChange)
   const wallSegments = wallItemsToSegments(cachedWalls);
 
-  console.debug(
+  console.log(
     `[Persistence] Computing visibility: ${cachedWalls.length} wall items -> ${wallSegments.length} segments`
   );
 
