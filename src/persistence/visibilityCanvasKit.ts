@@ -134,21 +134,19 @@ function buildShadowFrustum(
       return { x: origin.x + dx * scale, y: origin.y + dy * scale };
     });
 
-    // Build per-edge shadow quads instead of a single frustum polygon.
-    // Individual quads avoid self-intersection issues with concave shapes
-    // and have consistent winding regardless of the source contour direction.
-    for (let i = 0; i < verts.length; i++) {
-      const j = (i + 1) % verts.length;
-      frustumPath.addPoly(
-        [
-          verts[i].x, verts[i].y,
-          verts[j].x, verts[j].y,
-          projected[j].x, projected[j].y,
-          projected[i].x, projected[i].y,
-        ],
-        true
-      );
+    // Build a single frustum polygon: near vertices forward, far vertices
+    // backward.  This gives one non-self-intersecting polygon for convex
+    // shapes.  Per-edge quads were tried but adjacent quads wind in
+    // opposite directions (toward-light vs away-from-light edges) causing
+    // winding cancellation under non-zero fill.
+    const flat: number[] = [];
+    for (const v of verts) {
+      flat.push(v.x, v.y);
     }
+    for (let i = projected.length - 1; i >= 0; i--) {
+      flat.push(projected[i].x, projected[i].y);
+    }
+    frustumPath.addPoly(flat, true);
 
     hasContent = true;
   }
