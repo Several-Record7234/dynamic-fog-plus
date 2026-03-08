@@ -358,7 +358,7 @@ async function computeAndAccumulate(
   // Scale radius so persistence stays inside the light's feathered edge.
   // Hard-edge lights (falloff <= 0.5) have a sharper boundary so 90% suffices.
   // Soft-edge lights (falloff >= 1) fade out more gradually, needing a tighter cut.
-  const radiusScale = tracked.falloff <= 0.5 ? 0.90 : 0.80;
+  const radiusScale = tracked.falloff <= 0.5 ? 0.90 : 0.75;
   const persistenceRadius = tracked.attenuationRadius * radiusScale;
 
   const visPath = computeVisibilityPath(

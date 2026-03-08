@@ -250,14 +250,9 @@ export function PersistenceControls() {
             size="small"
           />
         }
-        label={
-          <Typography variant="body2">
-            Fog persistence{" "}
-            <Typography component="span" variant="body2" color="text.secondary">
-              {settings.enabled ? "(on)" : "(off)"}
-            </Typography>
-          </Typography>
-        }
+        label={<Typography variant="body2">Fog persistence</Typography>}
+        labelPlacement="start"
+        sx={{ mx: 0, justifyContent: "space-between" }}
       />
 
       {settings.enabled && (
