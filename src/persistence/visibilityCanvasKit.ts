@@ -18,8 +18,8 @@ const SHADOW_PROJECTION_FACTOR = 3;
  *
  * For each FOG-layer shape we:
  *  1. Subtract the filled shape itself (accurate curved boundary)
- *  2. Build a "shadow frustum" — a projection of the shape's outline
- *     away from the light source — and subtract that too
+ *  2. Build per-edge shadow quads projected away from the light,
+ *     simplify them to resolve overlaps, and subtract the result
  *
  * Each subtraction is a separate PathOp.Difference call to avoid
  * winding-direction conflicts that occur when mixing sub-paths in
@@ -64,35 +64,11 @@ export function computeVisibilityCanvasKit(
     if (!shapeOk) shapeOpFails++;
 
     // 2. Build and subtract the shadow frustum (area behind the shape)
-    const frustumInfo = buildShadowFrustum(CK, fogPath, origin, farDist);
-    if (frustumInfo) {
-      // Diagnostic: log the first shape's frustum details
-      if (shapeCount === 0) {
-        console.log(
-          `[Persistence] DIAG shape #0: item.name="${item.name}" ` +
-          `type="${item.type}" visible=${item.visible}`
-        );
-        console.log(
-          `[Persistence] DIAG shape #0: contours=${frustumInfo.contourCount} ` +
-          `nearVerts=${frustumInfo.nearVertCount} ` +
-          `frustumVertCount=${frustumInfo.frustumVertCount}`
-        );
-        if (frustumInfo.sampleNear.length > 0) {
-          const n = frustumInfo.sampleNear;
-          const f = frustumInfo.sampleFar;
-          console.log(
-            `[Persistence] DIAG shape #0 near[0..2]: ` +
-            n.slice(0, 3).map((v: Vector2) => `(${v.x.toFixed(0)},${v.y.toFixed(0)})`).join(" ") +
-            ` | far[0..2]: ` +
-            f.slice(0, 3).map((v: Vector2) => `(${v.x.toFixed(0)},${v.y.toFixed(0)})`).join(" ")
-          );
-        }
-      }
-
-      const frustumOk = lightPath.op(frustumInfo.path, CK.PathOp.Difference);
+    const frustumPath = buildShadowFrustum(CK, fogPath, origin, farDist);
+    if (frustumPath) {
+      const frustumOk = lightPath.op(frustumPath, CK.PathOp.Difference);
       if (!frustumOk) frustumOpFails++;
-
-      frustumInfo.path.delete();
+      frustumPath.delete();
     }
 
     fogPath.delete();
@@ -109,53 +85,36 @@ export function computeVisibilityCanvasKit(
   const polylines = PathHelpers.commandsToPolylines(CK, commands, 10);
   lightPath.delete();
 
-  console.log(
-    `[Persistence] Result: ${polylines.length} polylines, ` +
-    `vertex counts: [${polylines.map((p) => p.length).join(", ")}]`
-  );
-
   // Drop degenerate contours
   return polylines.filter((p) => p.length >= 3);
 }
 
-interface FrustumResult {
-  path: SkPath;
-  contourCount: number;
-  nearVertCount: number;
-  frustumVertCount: number;
-  sampleNear: Vector2[];
-  sampleFar: Vector2[];
-}
-
 /**
- * Build a shadow frustum path for a fog shape.
+ * Build a shadow frustum path for a fog shape using per-edge quads.
  *
- * For each contour of the shape, creates a frustum polygon by tracing
- * the contour vertices forward, then their projections (from the light
- * source) backward:
- *
- *   V0 → V1 → … → VN → VN' → … → V1' → V0'
- *
+ * For each edge (Vi, Vi+1) of each contour, builds a quadrilateral:
+ *   Vi → Vi+1 → Vi+1' → Vi'
  * where Vi' = origin + (Vi − origin) × (farDist / |Vi − origin|)
  *
- * Returns result with the path and diagnostics, or null if no valid contours.
+ * Individual quads are always simple (non-self-intersecting). Overlapping
+ * quads are resolved by calling path.simplify() which merges them into a
+ * single clean outline.  This avoids the self-intersection problem that
+ * occurs when tracing all near vertices then all far vertices as one polygon
+ * (far vertices cross when the shape subtends a large angle from the light).
+ *
+ * Returns the simplified frustum path, or null if no valid contours.
  */
 function buildShadowFrustum(
   CK: CanvasKit,
   shapePath: SkPath,
   origin: Vector2,
   farDist: number
-): FrustumResult | null {
+): SkPath | null {
   const commands = PathHelpers.skPathToPathCommands(shapePath);
   const contours = PathHelpers.commandsToPolylines(CK, commands, 15);
 
   let hasContent = false;
   const frustumPath = new CK.Path();
-  let contourCount = 0;
-  let nearVertCount = 0;
-  let frustumVertCount = 0;
-  let sampleNear: Vector2[] = [];
-  let sampleFar: Vector2[] = [];
 
   for (let verts of contours) {
     if (verts.length < 3) continue;
@@ -169,40 +128,19 @@ function buildShadowFrustum(
     }
     if (verts.length < 3) continue;
 
-    contourCount++;
-    nearVertCount += verts.length;
-
     // Project each vertex away from the light source
-    const projected = verts.map((v) => {
-      const dx = v.x - origin.x;
-      const dy = v.y - origin.y;
-      const len = Math.sqrt(dx * dx + dy * dy);
-      if (len < 0.01) {
-        // Degenerate: vertex at the light origin — push arbitrarily
-        return { x: origin.x + farDist, y: origin.y };
-      }
-      const scale = farDist / len;
-      return { x: origin.x + dx * scale, y: origin.y + dy * scale };
-    });
+    const projected = verts.map((v) => projectVertex(v, origin, farDist));
 
-    // Capture samples for diagnostics (first contour only)
-    if (contourCount === 1) {
-      sampleNear = verts.slice(0, 5);
-      sampleFar = projected.slice(0, 5);
-    }
-
-    // Build frustum using moveTo/lineTo/close instead of addPoly
-    // to rule out any addPoly flat-array interpretation issues
-    frustumPath.moveTo(verts[0].x, verts[0].y);
-    for (let i = 1; i < verts.length; i++) {
-      frustumPath.lineTo(verts[i].x, verts[i].y);
-    }
-    for (let i = projected.length - 1; i >= 0; i--) {
+    // Build one quad per edge: Vi → Vi+1 → Vi+1' → Vi'
+    for (let i = 0; i < verts.length; i++) {
+      const j = (i + 1) % verts.length;
+      frustumPath.moveTo(verts[i].x, verts[i].y);
+      frustumPath.lineTo(verts[j].x, verts[j].y);
+      frustumPath.lineTo(projected[j].x, projected[j].y);
       frustumPath.lineTo(projected[i].x, projected[i].y);
+      frustumPath.close();
     }
-    frustumPath.close();
 
-    frustumVertCount += verts.length + projected.length;
     hasContent = true;
   }
 
@@ -211,14 +149,22 @@ function buildShadowFrustum(
     return null;
   }
 
-  return {
-    path: frustumPath,
-    contourCount,
-    nearVertCount,
-    frustumVertCount,
-    sampleNear,
-    sampleFar,
-  };
+  // Resolve overlapping quads into a single clean outline
+  frustumPath.simplify();
+
+  return frustumPath;
+}
+
+/** Project a vertex away from the light source to a fixed distance */
+function projectVertex(v: Vector2, origin: Vector2, farDist: number): Vector2 {
+  const dx = v.x - origin.x;
+  const dy = v.y - origin.y;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 0.01) {
+    return { x: origin.x + farDist, y: origin.y };
+  }
+  const scale = farDist / len;
+  return { x: origin.x + dx * scale, y: origin.y + dy * scale };
 }
 
 /**

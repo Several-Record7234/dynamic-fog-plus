@@ -30,6 +30,7 @@ export function PersistenceControls() {
   );
   const [perf, setPerf] = useState<PersistencePerf>(DEFAULT_PERSISTENCE_PERF);
   const [role, setRole] = useState<"GM" | "PLAYER">("PLAYER");
+  const [debugVis, setDebugVis] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -96,6 +97,13 @@ export function PersistenceControls() {
       [getPluginId("persistence-reset")]: Date.now(),
     });
     setPerf(DEFAULT_PERSISTENCE_PERF);
+  }
+
+  async function handleDebugToggle(enabled: boolean) {
+    setDebugVis(enabled);
+    await OBR.scene.setMetadata({
+      [getPluginId("persistence-debug")]: enabled,
+    });
   }
 
   if (role !== "GM") {
@@ -186,6 +194,23 @@ export function PersistenceControls() {
       >
         Reset Explored Areas
       </Button>
+
+      {settings.enabled && (
+        <FormControlLabel
+          control={
+            <Switch
+              checked={debugVis}
+              onChange={(_, checked) => handleDebugToggle(checked)}
+              size="small"
+            />
+          }
+          label={
+            <Typography variant="caption" color="text.secondary">
+              Debug: show shadow frustums
+            </Typography>
+          }
+        />
+      )}
     </Stack>
   );
 }

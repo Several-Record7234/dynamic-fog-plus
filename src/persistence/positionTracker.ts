@@ -12,6 +12,7 @@ import { DEFAULT_PERSISTENCE_SETTINGS } from "./types";
 import { computeVisibilityCanvasKit } from "./visibilityCanvasKit";
 import { accumulatePolygon, getAccumulatedPolygon, getTotalVertexCount, resetAccumulator } from "./polygonAccumulator";
 import { writePersistenceFogItem, removePersistenceFogItem } from "./fogWriter";
+import { drawDebugShapes, removeDebugShapes } from "./debugVisualize";
 
 /** Map of token item IDs to their tracked state */
 const trackedTokens = new Map<string, TrackedToken>();
@@ -27,6 +28,9 @@ let cachedDpi = 150;
 
 /** Last seen reset timestamp (to detect reset signals from the action UI) */
 let lastResetTimestamp = 0;
+
+/** Whether debug visualization is active */
+let debugVis = false;
 
 /** Cached CanvasKit instance for path boolean operations */
 let canvasKit: CanvasKit | null = null;
@@ -106,6 +110,17 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
     if (resetTs > lastResetTimestamp) {
       lastResetTimestamp = resetTs;
       resetPersistence();
+    }
+
+    // Check for debug vis toggle
+    const newDebug = getMetadata<boolean>(
+      metadata,
+      getPluginId("persistence-debug"),
+      false
+    );
+    if (newDebug !== debugVis) {
+      debugVis = newDebug;
+      if (!debugVis) removeDebugShapes();
     }
   });
 
@@ -265,6 +280,18 @@ async function computeAndAccumulate(
   );
 
   const t1 = performance.now();
+
+  // Draw debug shapes if enabled (on every computation so they track the token)
+  if (debugVis && canvasKit) {
+    drawDebugShapes(
+      canvasKit,
+      position,
+      tracked.attenuationRadius,
+      cachedFogItems,
+      tracked.outerAngle,
+      tracked.lightRotation
+    );
+  }
 
   const totalVerts = visRings.reduce((sum, r) => sum + r.length, 0);
   console.log(
