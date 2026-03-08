@@ -252,13 +252,13 @@ export function PersistenceControls() {
         }
         label={<Typography variant="body2">Fog persistence</Typography>}
         labelPlacement="start"
-        sx={{ mx: 0, justifyContent: "space-between" }}
+        sx={{ mx: 0, justifyContent: "space-between", alignItems: "center" }}
       />
 
       {settings.enabled && (
         <>
           {/* Persistence opacity dropdown */}
-          <Stack direction="row" alignItems="center" gap={1}>
+          <Stack direction="row" alignItems="center" justifyContent="center" gap={1}>
             <Typography variant="body2" sx={{ whiteSpace: "nowrap" }}>
               Persistence opacity
             </Typography>
@@ -302,8 +302,8 @@ export function PersistenceControls() {
 
           {/* Stats row */}
           {perf.vertexCount > 0 && (
-            <Stack direction="row" alignItems="center" gap={0.5}>
-              <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+            <Stack direction="row" alignItems="center" justifyContent="center" gap={0.5}>
+              <Typography variant="caption" color="text.secondary">
                 Vertices: {perf.vertexCount}
                 {" | "}Walls: {perf.wallCount}
                 {perf.totalMs > 0 && (
