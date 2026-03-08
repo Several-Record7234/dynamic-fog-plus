@@ -39,23 +39,16 @@ export function computeVisibilityPolygon(
   const boundarySegments = createBoundarySegments(origin, radius, 64);
   const allWalls = [...relevantWalls, ...boundarySegments];
 
-  // Collect unique angles from all endpoints
+  // Collect angles from all endpoints of all relevant walls.
+  // No range filter — walls already passed segmentIntersectsCircle, so even
+  // distant endpoints must generate rays to ensure the sweep doesn't miss
+  // wall segments that cross through the light range.
   const angles: number[] = [];
   for (const wall of allWalls) {
-    const dx1 = wall.a.x - origin.x;
-    const dy1 = wall.a.y - origin.y;
-    const dx2 = wall.b.x - origin.x;
-    const dy2 = wall.b.y - origin.y;
-
-    // Only consider endpoints within range (with margin for boundary segments)
-    if (dx1 * dx1 + dy1 * dy1 <= radiusSq * 1.1) {
-      const angle = Math.atan2(dy1, dx1);
-      angles.push(angle - EPSILON, angle, angle + EPSILON);
-    }
-    if (dx2 * dx2 + dy2 * dy2 <= radiusSq * 1.1) {
-      const angle = Math.atan2(dy2, dx2);
-      angles.push(angle - EPSILON, angle, angle + EPSILON);
-    }
+    const a1 = Math.atan2(wall.a.y - origin.y, wall.a.x - origin.x);
+    angles.push(a1 - EPSILON, a1, a1 + EPSILON);
+    const a2 = Math.atan2(wall.b.y - origin.y, wall.b.x - origin.x);
+    angles.push(a2 - EPSILON, a2, a2 + EPSILON);
   }
 
   // Sort angles
