@@ -2,7 +2,7 @@
   "name": "Dynamic Fog+",
   "version": "2.0.0",
   "manifest_version": 1,
-  "author": "Owlbear Rodeo",
+  "author": "Andrew C",
   "homepage_url": "https://extensions.owlbear.rodeo/dynamic-fog",
   "icon": "/logo.png",
   "description": "Dynamic fog with walls, doors, lights, and fog of war persistence",
