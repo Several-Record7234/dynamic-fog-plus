@@ -258,7 +258,7 @@ export function PersistenceControls() {
       {settings.enabled && (
         <>
           {/* Persistence opacity dropdown */}
-          <Stack direction="row" alignItems="center" justifyContent="center" gap={1}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
             <Typography variant="body2" sx={{ whiteSpace: "nowrap" }}>
               Persistence opacity
             </Typography>
