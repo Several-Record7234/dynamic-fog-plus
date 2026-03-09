@@ -5,7 +5,6 @@ author: Owlbear Rodeo
 image: https://raw.githubusercontent.com/owlbear-rodeo/dynamic-fog/main/docs/header.jpg
 icon: https://dynamic-fog.owlbear.rodeo/logo.png
 tags:
-  - built-by-owlbear
   - fog
 manifest: https://dynamic-fog.owlbear.rodeo/manifest.json
 learn-more: https://extensions.owlbear.rodeo/dynamic-fog
