@@ -355,11 +355,11 @@ async function computeAndAccumulate(
 
   const t0 = performance.now();
 
-  // Scale radius so persistence stays inside the light's feathered edge.
-  // Hard-edge lights (falloff <= 0.5) have a sharper boundary so 90% suffices.
-  // Soft-edge lights (falloff >= 1) fade out more gradually, needing a tighter cut.
+  // Scale radius so persistence stays inside the light's feathered edge,
+  // then snap to the nearest grid cell boundary so cardinal points align.
   const radiusScale = tracked.falloff <= 0.5 ? 0.90 : 0.80;
-  const persistenceRadius = tracked.attenuationRadius * radiusScale;
+  const scaledRadius = tracked.attenuationRadius * radiusScale;
+  const persistenceRadius = Math.round(scaledRadius / cachedDpi) * cachedDpi;
 
   const visPath = computeVisibilityPath(
     canvasKit,
