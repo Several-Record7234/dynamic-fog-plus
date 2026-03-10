@@ -48,12 +48,17 @@ export interface PersistenceSettings {
   excludedTokens: string[];
   /** Fill opacity of the persistence cutout (0 = fully transparent, 1 = fully reveals map) */
   revealOpacity: number;
+  /** When true, persist environmental (SECONDARY) lights' full illuminated area
+   *  whenever a PC has line-of-sight to them from any distance.
+   *  When false, SECONDARY lights are ignored for persistence. */
+  persistDistantLights: boolean;
 }
 
 export const DEFAULT_PERSISTENCE_SETTINGS: PersistenceSettings = {
   enabled: false,
   excludedTokens: [],
   revealOpacity: 0.5,
+  persistDistantLights: true,
 };
 
 /** Performance metrics published per computation cycle */

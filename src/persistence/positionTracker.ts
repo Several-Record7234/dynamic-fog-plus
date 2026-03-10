@@ -365,7 +365,7 @@ async function handleItemsChange(items: Item[]): Promise<void> {
   }
 
   // --- Pass 2: Process SECONDARY lights visible from moved PRIMARY tokens ---
-  if (movedPrimaryPaths.length > 0 && canvasKit) {
+  if (settings.persistDistantLights && movedPrimaryPaths.length > 0 && canvasKit) {
     for (const { token, config, lightType } of tokenConfigs) {
       if (lightType !== "SECONDARY") continue;
       if (settings.excludedTokens.includes(token.id)) continue;
@@ -395,12 +395,13 @@ async function handleItemsChange(items: Item[]): Promise<void> {
 
       // Check if any PRIMARY light has unobstructed LoS to this SECONDARY.
       // There's no range limit — a PC can see a distant torch if no fog blocks
-      // the line of sight.  We compute a visibility path with a radius large
-      // enough to reach the SECONDARY, then test containment.
+      // the line of sight.  We compute a visibility path from the PRIMARY that
+      // reaches the far edge of the SECONDARY's light pool, so it can serve
+      // both the containment check and the intersection.
       for (const primary of movedPrimaryPaths) {
         const dist = Math2.distance(primary.position, token.position);
-        // Use the distance (plus a small margin) as the LoS check radius
-        const losRadius = dist + cachedDpi;
+        // Reach past the SECONDARY to the far edge of its illuminated area
+        const losRadius = dist + attenuationRadius + cachedDpi;
 
         const losPath = computeVisibilityPath(
           canvasKit!,
@@ -411,17 +412,19 @@ async function handleItemsChange(items: Item[]): Promise<void> {
           primary.tracked.lightRotation
         );
         const canSee = losPath.contains(token.position.x, token.position.y);
-        losPath.delete();
 
         if (canSee) {
+          // Intersect the SECONDARY's full visibility with the PRIMARY's LoS
           await computeSecondaryIntersection(token.position, {
             attenuationRadius,
             outerAngle,
             lightRotation,
             falloff,
-          }, primary.visPath);
+          }, losPath);
+          losPath.delete();
           break; // One PRIMARY seeing it is enough to trigger
         }
+        losPath.delete();
       }
     }
   }
@@ -536,7 +539,10 @@ async function computeAndAccumulate(
 
 /**
  * Compute a SECONDARY (environmental) light's visibility, intersect it with
- * a PRIMARY light's visibility path, and accumulate only the overlapping area.
+ * a PRIMARY light's full line-of-sight path, and accumulate the overlap.
+ * The PRIMARY LoS path should extend far enough to cover the SECONDARY's
+ * entire illuminated area, so the full pool of a distant torch is persisted
+ * when the PC can see it.
  */
 async function computeSecondaryIntersection(
   secondaryPosition: Vector2,

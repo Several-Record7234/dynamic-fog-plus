@@ -143,6 +143,14 @@ export function PersistenceControls() {
     });
   }
 
+  async function handleDistantLightsToggle(checked: boolean) {
+    const newSettings = { ...settings, persistDistantLights: checked };
+    setSettings(newSettings);
+    await OBR.scene.setMetadata({
+      [getPluginId("persistence-settings")]: newSettings,
+    });
+  }
+
   function clearUndoTimer() {
     if (undoTimerRef.current) {
       clearInterval(undoTimerRef.current);
@@ -257,6 +265,20 @@ export function PersistenceControls() {
 
       {settings.enabled && (
         <>
+          {/* Distant environmental lights toggle */}
+          <FormControlLabel
+            control={
+              <Switch
+                checked={settings.persistDistantLights}
+                onChange={(_, checked) => handleDistantLightsToggle(checked)}
+                size="small"
+              />
+            }
+            label={<Typography variant="body2">Persist distant lights</Typography>}
+            labelPlacement="start"
+            sx={{ mx: 0, justifyContent: "space-between", alignItems: "center" }}
+          />
+
           {/* Persistence opacity dropdown */}
           <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
             <Typography variant="body2" sx={{ whiteSpace: "nowrap" }}>
