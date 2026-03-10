@@ -39,6 +39,9 @@ let lastResetTimestamp = 0;
 /** Last seen undo-reset timestamp */
 let lastUndoResetTimestamp = 0;
 
+/** Last seen discard-undo timestamp */
+let lastDiscardTimestamp = 0;
+
 /** Saved path commands for undo (cleared after expiry or undo) */
 let savedCommandsForUndo: import("@owlbear-rodeo/sdk").PathCommand[] | null = null;
 
@@ -101,6 +104,11 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
       getPluginId("persistence-undo-reset"),
       0
     );
+    lastDiscardTimestamp = getMetadata<number>(
+      metadata,
+      getPluginId("persistence-discard-undo"),
+      0
+    );
   });
 
   // Subscribe to scene item changes
@@ -159,7 +167,8 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
       getPluginId("persistence-discard-undo"),
       0
     );
-    if (discardTs > 0) {
+    if (discardTs > lastDiscardTimestamp) {
+      lastDiscardTimestamp = discardTs;
       discardUndoSnapshot();
     }
 
@@ -200,6 +209,11 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
         lastUndoResetTimestamp = getMetadata<number>(
           metadata,
           getPluginId("persistence-undo-reset"),
+          0
+        );
+        lastDiscardTimestamp = getMetadata<number>(
+          metadata,
+          getPluginId("persistence-discard-undo"),
           0
         );
       });
@@ -379,10 +393,27 @@ async function handleItemsChange(items: Item[]): Promise<void> {
         });
       }
 
-      // Check if any PRIMARY light's visibility contains this SECONDARY's position
+      // Check if any PRIMARY light has unobstructed LoS to this SECONDARY.
+      // There's no range limit — a PC can see a distant torch if no fog blocks
+      // the line of sight.  We compute a visibility path with a radius large
+      // enough to reach the SECONDARY, then test containment.
       for (const primary of movedPrimaryPaths) {
-        if (canvasKit && primary.visPath.contains(token.position.x, token.position.y)) {
-          // Compute SECONDARY visibility, intersect with PRIMARY's LoS, accumulate
+        const dist = Math2.distance(primary.position, token.position);
+        // Use the distance (plus a small margin) as the LoS check radius
+        const losRadius = dist + cachedDpi;
+
+        const losPath = computeVisibilityPath(
+          canvasKit!,
+          primary.position,
+          losRadius,
+          cachedFogItems,
+          primary.tracked.outerAngle,
+          primary.tracked.lightRotation
+        );
+        const canSee = losPath.contains(token.position.x, token.position.y);
+        losPath.delete();
+
+        if (canSee) {
           await computeSecondaryIntersection(token.position, {
             attenuationRadius,
             outerAngle,
