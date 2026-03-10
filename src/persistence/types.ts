@@ -36,6 +36,8 @@ export interface TrackedToken {
   lightRotation: number;
   /** Light falloff (0.2 = hard edge, 1.5 = soft edge, default 1) */
   falloff: number;
+  /** Light type: "PRIMARY" = player character, "SECONDARY" = environmental */
+  lightType: string;
 }
 
 /** Settings stored in scene metadata for persistence state */

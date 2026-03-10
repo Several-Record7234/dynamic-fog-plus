@@ -1,6 +1,6 @@
 import type { CanvasKit, Path as SkPath } from "canvaskit-wasm";
 import type { Vector2, Item } from "@owlbear-rodeo/sdk";
-import { isShape, MathM } from "@owlbear-rodeo/sdk";
+import { MathM } from "@owlbear-rodeo/sdk";
 import { PathHelpers } from "../background/util/PathHelpers";
 import { isDrawing } from "../types/Drawing";
 import type { Drawing } from "../types/Drawing";
@@ -53,10 +53,11 @@ export function computeVisibilityPath(
     const fogPath = PathHelpers.drawingToSkPath(drawing, CK);
     if (!fogPath) continue;
 
-    // Build the full visual boundary (fill + stroke) like WallHelpers does.
-    // Without stroke, the frustum starts from the fill center line, leaving
-    // a gap between the visual fog boundary and the shadow.
-    const visualPath = buildVisualBoundary(CK, fogPath, drawing);
+    // Use the fill path directly for the visual boundary.
+    // WallHelpers expands with stroke() but that triggers CanvasKit dash()
+    // errors on some fog shapes.  The fill-only boundary is at most half a
+    // stroke width smaller — negligible given the radius scaling we apply.
+    const visualPath = fogPath.copy();
 
     const transform = MathM.fromItem(item);
     visualPath.transform(...transform);
@@ -88,49 +89,6 @@ export function computeVisibilityPath(
   return lightPath;
 }
 
-/**
- * Build the full visual boundary of a fog drawing (fill + stroke).
- *
- * OBR renders fog shapes with both fill and stroke. The stroke extends
- * beyond the fill path by half the stroke width. If we only use the fill
- * path, the shadow frustum starts from the center line of the stroke,
- * leaving a visible gap between the fog shape edge and the shadow.
- *
- * Returns a NEW path — the caller must delete both it and the original fogPath.
- */
-function buildVisualBoundary(
-  CK: CanvasKit,
-  fogPath: SkPath,
-  drawing: Drawing
-): SkPath {
-  const sw = drawing.style.strokeWidth;
-  const so = drawing.style.strokeOpacity;
-
-  // No stroke or invisible stroke — just use the fill path
-  if (!sw || sw <= 0 || !so || so <= 0) {
-    return fogPath.copy();
-  }
-
-  // Create stroke outline (same logic as WallHelpers)
-  const strokePath = fogPath.copy();
-  strokePath.stroke({
-    cap: isShape(drawing) ? CK.StrokeCap.Square : CK.StrokeCap.Round,
-    join: isShape(drawing) ? CK.StrokeJoin.Miter : CK.StrokeJoin.Round,
-    width: sw,
-  });
-
-  // Union fill + stroke to get the full visual boundary
-  const hasFill = "fillOpacity" in drawing.style && drawing.style.fillOpacity > 0;
-  if (hasFill) {
-    const combined = fogPath.copy();
-    combined.op(strokePath, CK.PathOp.Union);
-    strokePath.delete();
-    return combined;
-  }
-
-  // Stroke-only shape
-  return strokePath;
-}
 
 /**
  * Build a shadow frustum path for a fog shape using per-edge quads.

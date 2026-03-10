@@ -274,6 +274,8 @@ function discardUndoSnapshot(): void {
 /**
  * Handle scene item changes.
  * Identify light-bearing tokens and track their movement.
+ * PRIMARY lights compute visibility directly; SECONDARY (environmental)
+ * lights only contribute the portion visible from a PRIMARY light's LoS.
  */
 async function handleItemsChange(items: Item[]): Promise<void> {
   if (!settings.enabled) return;
@@ -282,20 +284,33 @@ async function handleItemsChange(items: Item[]): Promise<void> {
     (item) => getPluginId("light") in item.metadata
   );
 
-  const currentIds = new Set<string>();
+  // Parse config for all light tokens and split by type
+  const tokenConfigs: { token: Item; config: LightConfig; lightType: string }[] = [];
   for (const token of lightTokens) {
-    currentIds.add(token.id);
-
-    if (settings.excludedTokens.includes(token.id)) continue;
-
-    // Skip hidden tokens — their light is disabled while hidden
-    if (!token.visible) continue;
-
     const config = getMetadata<LightConfig>(
       token.metadata,
       getPluginId("light"),
       {}
     );
+    tokenConfigs.push({
+      token,
+      config,
+      lightType: config.lightType ?? "PRIMARY",
+    });
+  }
+
+  const currentIds = new Set<string>();
+
+  // Collect PRIMARY tokens that moved this cycle (we need their visibility
+  // paths to intersect with SECONDARY lights)
+  const movedPrimaryPaths: { position: Vector2; tracked: TrackedToken; visPath: import("canvaskit-wasm").Path }[] = [];
+
+  // --- Pass 1: Process PRIMARY lights ---
+  for (const { token, config, lightType } of tokenConfigs) {
+    currentIds.add(token.id);
+    if (lightType !== "PRIMARY") continue;
+    if (settings.excludedTokens.includes(token.id)) continue;
+    if (!token.visible) continue;
 
     const attenuationRadius = config.attenuationRadius ?? cachedDpi * 6;
     const outerAngle = config.outerAngle ?? 360;
@@ -313,9 +328,11 @@ async function handleItemsChange(items: Item[]): Promise<void> {
         innerAngle,
         lightRotation,
         falloff,
+        lightType,
       };
       trackedTokens.set(token.id, newTracked);
-      await computeAndAccumulate(token.position, newTracked);
+      const visPath = await computeAndAccumulate(token.position, newTracked);
+      if (visPath) movedPrimaryPaths.push({ position: token.position, tracked: newTracked, visPath });
     } else {
       const threshold = cachedDpi / 2;
       const dist = Math2.distance(token.position, tracked.lastComputedPosition);
@@ -327,9 +344,60 @@ async function handleItemsChange(items: Item[]): Promise<void> {
         tracked.innerAngle = innerAngle;
         tracked.lightRotation = lightRotation;
         tracked.falloff = falloff;
-        await computeAndAccumulate(token.position, tracked);
+        const visPath = await computeAndAccumulate(token.position, tracked);
+        if (visPath) movedPrimaryPaths.push({ position: token.position, tracked, visPath });
       }
     }
+  }
+
+  // --- Pass 2: Process SECONDARY lights visible from moved PRIMARY tokens ---
+  if (movedPrimaryPaths.length > 0 && canvasKit) {
+    for (const { token, config, lightType } of tokenConfigs) {
+      if (lightType !== "SECONDARY") continue;
+      if (settings.excludedTokens.includes(token.id)) continue;
+      if (!token.visible) continue;
+
+      // Track SECONDARY tokens so they're in the currentIds set
+      currentIds.add(token.id);
+      const attenuationRadius = config.attenuationRadius ?? cachedDpi * 6;
+      const outerAngle = config.outerAngle ?? 360;
+      const innerAngle = config.innerAngle ?? outerAngle;
+      const lightRotation = token.rotation + (config.rotation ?? 0);
+      const falloff = config.falloff ?? 1;
+
+      // Ensure tracked entry exists for SECONDARY
+      if (!trackedTokens.has(token.id)) {
+        trackedTokens.set(token.id, {
+          itemId: token.id,
+          lastComputedPosition: { ...token.position },
+          attenuationRadius,
+          outerAngle,
+          innerAngle,
+          lightRotation,
+          falloff,
+          lightType,
+        });
+      }
+
+      // Check if any PRIMARY light's visibility contains this SECONDARY's position
+      for (const primary of movedPrimaryPaths) {
+        if (canvasKit && primary.visPath.contains(token.position.x, token.position.y)) {
+          // Compute SECONDARY visibility, intersect with PRIMARY's LoS, accumulate
+          await computeSecondaryIntersection(token.position, {
+            attenuationRadius,
+            outerAngle,
+            lightRotation,
+            falloff,
+          }, primary.visPath);
+          break; // One PRIMARY seeing it is enough to trigger
+        }
+      }
+    }
+  }
+
+  // Clean up PRIMARY visibility paths
+  for (const { visPath } of movedPrimaryPaths) {
+    visPath.delete();
   }
 
   for (const id of trackedTokens.keys()) {
@@ -343,14 +411,17 @@ async function handleItemsChange(items: Item[]): Promise<void> {
  * Compute visibility at a position and accumulate into the persistence path.
  * Uses CanvasKit path-boolean operations for both visibility and accumulation,
  * which correctly preserves holes where fog shapes were subtracted.
+ *
+ * Returns the visibility SkPath (caller must delete) so PRIMARY callers can
+ * reuse it for SECONDARY intersection checks.  Returns null on error or rejection.
  */
 async function computeAndAccumulate(
   position: Vector2,
   tracked: TrackedToken
-): Promise<void> {
+): Promise<import("canvaskit-wasm").Path | null> {
   if (!canvasKit) {
     console.warn("[Persistence] CanvasKit not available, skipping computation");
-    return;
+    return null;
   }
 
   const t0 = performance.now();
@@ -386,11 +457,11 @@ async function computeAndAccumulate(
 
   // Accumulate via CanvasKit PathOp.Union (preserves holes)
   const accResult = accumulateVisibilityPath(visPath);
-  visPath.delete();
 
   const t2 = performance.now();
 
   if (accResult.status === "rejected") {
+    visPath.delete();
     await OBR.scene.setMetadata({
       [getPluginId("persistence-vertex-count")]: accResult.vertexCount,
       [getPluginId("persistence-perf")]: {
@@ -402,7 +473,7 @@ async function computeAndAccumulate(
         status: "rejected",
       },
     });
-    return;
+    return null;
   }
 
   // Write to the FOG layer
@@ -427,4 +498,61 @@ async function computeAndAccumulate(
       status: accResult.status,
     },
   });
+
+  // Return the visibility path for SECONDARY intersection (caller owns it)
+  return visPath;
+}
+
+/**
+ * Compute a SECONDARY (environmental) light's visibility, intersect it with
+ * a PRIMARY light's visibility path, and accumulate only the overlapping area.
+ */
+async function computeSecondaryIntersection(
+  secondaryPosition: Vector2,
+  secondaryConfig: {
+    attenuationRadius: number;
+    outerAngle: number;
+    lightRotation: number;
+    falloff: number;
+  },
+  primaryVisPath: import("canvaskit-wasm").Path
+): Promise<void> {
+  if (!canvasKit) return;
+
+  const radiusScale = secondaryConfig.falloff <= 0.5 ? 0.90 : 0.80;
+  const scaledRadius = secondaryConfig.attenuationRadius * radiusScale;
+  const persistenceRadius = Math.round(scaledRadius / cachedDpi) * cachedDpi;
+
+  // Compute what the SECONDARY light can see on its own
+  const secondaryVisPath = computeVisibilityPath(
+    canvasKit,
+    secondaryPosition,
+    persistenceRadius,
+    cachedFogItems,
+    secondaryConfig.outerAngle,
+    secondaryConfig.lightRotation
+  );
+
+  // Intersect with PRIMARY's visibility — only the overlapping sliver survives
+  const intersected = secondaryVisPath.copy();
+  const ok = intersected.op(primaryVisPath, canvasKit.PathOp.Intersect);
+
+  secondaryVisPath.delete();
+
+  if (!ok || intersected.isEmpty()) {
+    intersected.delete();
+    return;
+  }
+
+  // Accumulate the intersected sliver
+  const accResult = accumulateVisibilityPath(intersected);
+  intersected.delete();
+
+  if (accResult.status === "rejected") return;
+
+  // Write updated shape
+  const commands = getAccumulatedPathCommands();
+  if (commands && commands.length > 0) {
+    await writePersistenceFogItem(commands, settings.revealOpacity);
+  }
 }
