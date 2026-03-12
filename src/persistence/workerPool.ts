@@ -196,6 +196,9 @@ export function prepareFogShapes(
     const fogPath = PathHelpers.drawingToSkPath(drawing, CK);
     if (!fogPath) continue;
 
+    // Normalize fill type so winding direction doesn't affect path ops
+    fogPath.setFillType(CK.FillType.EvenOdd);
+
     // Transform in place
     fogPath.transform(...MathM.fromItem(item));
 

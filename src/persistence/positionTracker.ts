@@ -112,8 +112,11 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
     cachedDpi = dpi;
   });
 
-  // Load persistence settings from scene metadata
-  OBR.scene.getMetadata().then((metadata) => {
+  // Load persistence settings from scene metadata, then do an initial scan
+  // so existing light-bearing tokens get their starting position persisted.
+  // (The onChange subscription may fire before settings load, hitting the
+  // `if (!settings.enabled) return` guard and missing the initial tokens.)
+  OBR.scene.getMetadata().then(async (metadata) => {
     settings = getMetadata<PersistenceSettings>(
       metadata,
       getPluginId("persistence-settings"),
@@ -134,6 +137,12 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
       getPluginId("persistence-discard-undo"),
       0
     );
+
+    // Initial scan for existing light-bearing tokens
+    if (settings.enabled) {
+      const items = await OBR.scene.items.getItems();
+      handleItemsChange(items);
+    }
   });
 
   // Subscribe to scene item changes.

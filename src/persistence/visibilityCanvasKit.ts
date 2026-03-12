@@ -54,6 +54,12 @@ export function computeVisibilityPath(
     const fogPath = PathHelpers.drawingToSkPath(drawing, CK);
     if (!fogPath) continue;
 
+    // Normalize fill type to EvenOdd so winding direction doesn't affect
+    // which area is considered "filled". Without this, a shape drawn in
+    // reverse winding can cause PathOp.Difference to subtract the exterior
+    // (entire map) instead of the shape interior.
+    fogPath.setFillType(CK.FillType.EvenOdd);
+
     // Transform fogPath in place — no copy needed since drawingToSkPath
     // creates a fresh path each iteration and we discard it after use.
     fogPath.transform(...MathM.fromItem(item));

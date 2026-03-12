@@ -87,6 +87,7 @@ export async function drawDebugShapes(
     const drawing = item as Drawing;
     const fogPath = PathHelpers.drawingToSkPath(drawing, CK);
     if (!fogPath) continue;
+    fogPath.setFillType(CK.FillType.EvenOdd);
 
     // Build visual boundary (fill + stroke) to match the actual visibility code
     const visualPath = buildDebugVisualBoundary(CK, fogPath, drawing);
