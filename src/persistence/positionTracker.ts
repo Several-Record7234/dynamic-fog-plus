@@ -25,7 +25,7 @@ import {
   resetAccumulator,
   restoreFromPathCommands,
 } from "./polygonAccumulator";
-import { writePersistenceFogItem, removePersistenceFogItem, readPersistenceFogItem, updatePersistenceOpacity } from "./fogWriter";
+import { writePersistenceFogItem, removePersistenceFogItem, readPersistenceFogItem, updatePersistenceOpacity, setPersistenceCutState } from "./fogWriter";
 import { drawDebugShapes, removeDebugShapes } from "./debugVisualize";
 
 /** Map of token item IDs to their tracked state */
@@ -172,18 +172,10 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
       DEFAULT_PERSISTENCE_SETTINGS
     );
 
-    // Toggle fog item visibility when enabled state changes
+    // Toggle fog item cut state when enabled state changes
     if (settings.enabled !== prevEnabled) {
-      if (!settings.enabled) {
-        // Disabled — remove the fog item but keep accumulator state
-        removePersistenceFogItem();
-      } else {
-        // Re-enabled — restore the fog item from accumulated state
-        const commands = getAccumulatedPathCommands();
-        if (commands && commands.length > 0) {
-          writePersistenceFogItem(commands, settings.revealOpacity);
-        }
-      }
+      // cutout=true (visible=false) → reveals map; cutout=false (visible=true) → inert fog
+      setPersistenceCutState(settings.enabled);
     }
 
     // Apply opacity change immediately to existing fog item

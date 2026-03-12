@@ -107,6 +107,20 @@ export async function updatePersistenceOpacity(opacity: number): Promise<void> {
   }
 }
 
+/** Toggle the persistence fog item's cut state (visible: false = cutout = reveals) */
+export async function setPersistenceCutState(isCutout: boolean): Promise<void> {
+  if (!persistenceItemId) return;
+  try {
+    await OBR.scene.items.updateItems([persistenceItemId], (items) => {
+      for (const item of items) {
+        item.visible = !isCutout; // OBR: visible=false means cutout
+      }
+    });
+  } catch {
+    // Item may have been deleted
+  }
+}
+
 /** Remove the persistence fog item from the scene */
 export async function removePersistenceFogItem(): Promise<void> {
   if (persistenceItemId) {
