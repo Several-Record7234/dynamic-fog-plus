@@ -21,7 +21,7 @@ import {
   initAccumulator,
   accumulateVisibilityPath,
   getAccumulatedPathCommands,
-  getTotalVertexCount,
+  getTotalCommandCount,
   resetAccumulator,
   restoreFromPathCommands,
 } from "./polygonAccumulator";
@@ -70,6 +70,12 @@ let workerPool: VisibilityWorkerPool | null = null;
 
 /** Pre-processed fog shapes for worker consumption (updated when fog cache changes) */
 let preparedShapes: PreparedFogShape[] = [];
+
+/** Guard against concurrent computeAndAccumulate calls.
+ *  The async worker path yields control to the event loop, allowing
+ *  another onChange to fire before the first computation finishes.
+ *  Concurrent accumulations corrupt the accumulated path state. */
+let computeInFlight = false;
 
 /**
  * Initialize the position tracker.
@@ -309,7 +315,7 @@ async function undoReset(): Promise<void> {
   await writePersistenceFogItem(savedCommandsForUndo, settings.revealOpacity);
   savedCommandsForUndo = null;
   // Publish updated perf/vertex count
-  const vertexCount = getTotalVertexCount();
+  const vertexCount = getTotalCommandCount();
   await OBR.scene.setMetadata({
     [getPluginId("persistence-vertex-count")]: vertexCount,
     [getPluginId("persistence-perf")]: {
@@ -501,96 +507,106 @@ async function computeAndAccumulate(
     return null;
   }
 
-  const t0 = performance.now();
+  // Prevent concurrent computations — the async worker path yields to the
+  // event loop and another onChange can start a second computation before
+  // the first finishes, corrupting the accumulated path.
+  if (computeInFlight) return null;
+  computeInFlight = true;
 
-  // Scale radius so persistence stays inside the light's feathered edge,
-  // then snap to the nearest grid cell boundary so cardinal points align.
-  const radiusScale = tracked.falloff <= 0.5 ? 0.90 : 0.80;
-  const scaledRadius = tracked.attenuationRadius * radiusScale;
-  const persistenceRadius = Math.round(scaledRadius / cachedDpi) * cachedDpi;
+  try {
+    const t0 = performance.now();
 
-  // Use parallel workers when pool is ready and there are enough fog shapes
-  const useParallel = shouldUseWorkers(workerPool, preparedShapes.length);
-  const visPath = useParallel
-    ? await computeVisibilityPathParallel(
+    // Scale radius so persistence stays inside the light's feathered edge,
+    // then snap to the nearest grid cell boundary so cardinal points align.
+    const radiusScale = tracked.falloff <= 0.5 ? 0.90 : 0.80;
+    const scaledRadius = tracked.attenuationRadius * radiusScale;
+    const persistenceRadius = Math.round(scaledRadius / cachedDpi) * cachedDpi;
+
+    // Use parallel workers when pool is ready and there are enough fog shapes
+    const useParallel = shouldUseWorkers(workerPool, preparedShapes.length);
+    const visPath = useParallel
+      ? await computeVisibilityPathParallel(
+          canvasKit,
+          position,
+          persistenceRadius,
+          preparedShapes,
+          workerPool!,
+          tracked.outerAngle,
+          tracked.lightRotation
+        )
+      : computeVisibilityPath(
+          canvasKit,
+          position,
+          persistenceRadius,
+          cachedFogItems,
+          tracked.outerAngle,
+          tracked.lightRotation
+        );
+
+    const t1 = performance.now();
+
+    // Draw debug shapes if enabled
+    if (debugVis) {
+      drawDebugShapes(
         canvasKit,
         position,
-        persistenceRadius,
-        preparedShapes,
-        workerPool!,
-        tracked.outerAngle,
-        tracked.lightRotation
-      )
-    : computeVisibilityPath(
-        canvasKit,
-        position,
-        persistenceRadius,
+        tracked.attenuationRadius,
         cachedFogItems,
         tracked.outerAngle,
         tracked.lightRotation
       );
+    }
 
-  const t1 = performance.now();
+    // Accumulate via CanvasKit PathOp.Union (preserves holes)
+    const accResult = accumulateVisibilityPath(visPath);
 
-  // Draw debug shapes if enabled
-  if (debugVis) {
-    drawDebugShapes(
-      canvasKit,
-      position,
-      tracked.attenuationRadius,
-      cachedFogItems,
-      tracked.outerAngle,
-      tracked.lightRotation
-    );
-  }
+    const t2 = performance.now();
 
-  // Accumulate via CanvasKit PathOp.Union (preserves holes)
-  const accResult = accumulateVisibilityPath(visPath);
+    if (accResult.status === "rejected") {
+      visPath.delete();
+      await OBR.scene.setMetadata({
+        [getPluginId("persistence-vertex-count")]: accResult.vertexCount,
+        [getPluginId("persistence-perf")]: {
+          totalMs: 0,
+          visMs: 0,
+          unionMs: 0,
+          wallCount: cachedFogItems.length,
+          vertexCount: accResult.vertexCount,
+          status: "rejected",
+        },
+      });
+      return null;
+    }
 
-  const t2 = performance.now();
+    // Write to the FOG layer
+    const commands = getAccumulatedPathCommands();
+    if (commands && commands.length > 0) {
+      await writePersistenceFogItem(commands, settings.revealOpacity);
+    }
 
-  if (accResult.status === "rejected") {
-    visPath.delete();
+    const totalMs = performance.now() - t0;
+    const visMs = t1 - t0;
+    const unionMs = t2 - t1;
+    const vertexCount = getTotalCommandCount();
+
     await OBR.scene.setMetadata({
-      [getPluginId("persistence-vertex-count")]: accResult.vertexCount,
+      [getPluginId("persistence-vertex-count")]: vertexCount,
       [getPluginId("persistence-perf")]: {
-        totalMs: 0,
-        visMs: 0,
-        unionMs: 0,
+        totalMs: Math.round(totalMs * 100) / 100,
+        visMs: Math.round(visMs * 100) / 100,
+        unionMs: Math.round(unionMs * 100) / 100,
         wallCount: cachedFogItems.length,
-        vertexCount: accResult.vertexCount,
-        status: "rejected",
+        vertexCount,
+        status: accResult.status,
+        parallel: useParallel,
       },
     });
-    return null;
+
+    // Return the visibility path for SECONDARY intersection (caller owns it)
+    return visPath;
+  } finally {
+    computeInFlight = false;
   }
-
-  // Write to the FOG layer
-  const commands = getAccumulatedPathCommands();
-  if (commands && commands.length > 0) {
-    await writePersistenceFogItem(commands, settings.revealOpacity);
-  }
-
-  const totalMs = performance.now() - t0;
-  const visMs = t1 - t0;
-  const unionMs = t2 - t1;
-  const vertexCount = getTotalVertexCount();
-
-  await OBR.scene.setMetadata({
-    [getPluginId("persistence-vertex-count")]: vertexCount,
-    [getPluginId("persistence-perf")]: {
-      totalMs: Math.round(totalMs * 100) / 100,
-      visMs: Math.round(visMs * 100) / 100,
-      unionMs: Math.round(unionMs * 100) / 100,
-      wallCount: cachedFogItems.length,
-      vertexCount,
-      status: accResult.status,
-      parallel: useParallel,
-    },
-  });
-
-  // Return the visibility path for SECONDARY intersection (caller owns it)
-  return visPath;
 }
 
 /**

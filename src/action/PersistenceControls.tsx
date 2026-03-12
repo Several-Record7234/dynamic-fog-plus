@@ -326,7 +326,7 @@ export function PersistenceControls() {
           {perf.vertexCount > 0 && (
             <Stack direction="row" alignItems="center" justifyContent="center" gap={0.5}>
               <Typography variant="caption" color="text.secondary">
-                Vertices: {perf.vertexCount}
+                Cmds: {perf.vertexCount}
                 {" | "}Walls: {perf.wallCount}
                 {perf.totalMs > 0 && (
                   <>

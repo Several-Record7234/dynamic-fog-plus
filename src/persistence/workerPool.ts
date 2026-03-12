@@ -17,8 +17,10 @@ import type { PreparedFogShape } from "./workers/visibilityWorker";
 
 export type { PreparedFogShape };
 
-/** Minimum fog shapes to justify worker overhead */
-const MIN_SHAPES_FOR_WORKERS = 4;
+/** Minimum fog shapes to justify worker overhead.
+ *  With 4 workers, each needs enough shapes for the parallelism to
+ *  outweigh message passing + Path.MakeFromCmds reconstruction cost. */
+const MIN_SHAPES_FOR_WORKERS = 12;
 
 interface PendingRequest {
   resolve: (cmds: Float32Array) => void;

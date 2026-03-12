@@ -36,30 +36,34 @@ function invalidateCache(): void {
 function ensureCache(): void {
   if (cacheValid || !accumulated) return;
   cachedCommands = PathHelpers.skPathToPathCommands(accumulated);
-  cachedVertexCount = 0;
-  for (const cmd of cachedCommands) {
-    if (cmd[0] !== Command.CLOSE) cachedVertexCount++;
-  }
+  // Count ALL commands (including CLOSE) — OBR's ~500 limit applies to
+  // the total command array length, not just vertices.
+  cachedVertexCount = cachedCommands.length;
   cacheValid = true;
 }
 
 /**
  * Vertex budget thresholds.
  *
+ * OBR silently rejects Path item updates when the total command count
+ * exceeds ~500.  Each ring adds a CLOSE command, so total commands =
+ * vertices + number_of_rings.  We target vertex counts that keep the
+ * total command count safely below 500.
+ *
  * - SIMPLIFY_SOFT:  periodic low-tolerance simplification (imperceptible)
  * - SIMPLIFY_HARD:  aggressive simplification at higher tolerance
  * - REJECT:         refuse to accumulate (the UI warns to reset)
  */
-const SIMPLIFY_SOFT_VERTEX_COUNT = 1500;
-const SIMPLIFY_HARD_VERTEX_COUNT = 3000;
-const REJECT_VERTEX_COUNT = 8000;
+const SIMPLIFY_SOFT_CMD_COUNT = 200;
+const SIMPLIFY_HARD_CMD_COUNT = 350;
+const REJECT_CMD_COUNT = 450;
 
 /** Simplify every N unions even if under threshold (keeps things tidy) */
-const SIMPLIFY_INTERVAL = 10;
+const SIMPLIFY_INTERVAL = 5;
 
 /** Douglas-Peucker tolerances in scene pixels */
-const TOLERANCE_SOFT = 1.5;
-const TOLERANCE_HARD = 4;
+const TOLERANCE_SOFT = 2;
+const TOLERANCE_HARD = 5;
 
 
 /** Result of an accumulate call, for the caller to react to */
@@ -83,9 +87,9 @@ export function accumulateVisibilityPath(visPath: SkPath): AccumulateResult {
   if (!ck) throw new Error("Accumulator not initialized — call initAccumulator first");
 
   // Use cached count (no serialisation) for the reject check
-  const currentCount = getTotalVertexCount();
+  const currentCount = getTotalCommandCount();
 
-  if (currentCount >= REJECT_VERTEX_COUNT) {
+  if (currentCount >= REJECT_CMD_COUNT) {
     return { status: "rejected", vertexCount: currentCount };
   }
 
@@ -98,15 +102,15 @@ export function accumulateVisibilityPath(visPath: SkPath): AccumulateResult {
   // Path mutated — invalidate cache and recount once
   invalidateCache();
   unionsSinceSimplify++;
-  const newCount = getTotalVertexCount();
+  const newCount = getTotalCommandCount();
 
-  if (newCount >= SIMPLIFY_HARD_VERTEX_COUNT) {
+  if (newCount >= SIMPLIFY_HARD_CMD_COUNT) {
     simplifyAccumulated(TOLERANCE_HARD);
     unionsSinceSimplify = 0;
     return { status: "simplified", tolerance: TOLERANCE_HARD };
   }
 
-  if (unionsSinceSimplify >= SIMPLIFY_INTERVAL || newCount > SIMPLIFY_SOFT_VERTEX_COUNT) {
+  if (unionsSinceSimplify >= SIMPLIFY_INTERVAL || newCount > SIMPLIFY_SOFT_CMD_COUNT) {
     simplifyAccumulated(TOLERANCE_SOFT);
     unionsSinceSimplify = 0;
     return { status: "simplified", tolerance: TOLERANCE_SOFT };
@@ -125,8 +129,10 @@ export function getAccumulatedPathCommands(): PathCommand[] | null {
   return cachedCommands;
 }
 
-/** Get the total vertex count of the accumulated path (cached, no serialisation) */
-export function getTotalVertexCount(): number {
+/** Get the total command count of the accumulated path (cached, no serialisation).
+ *  Includes all verbs (MOVE, LINE, QUAD, CUBIC, CONIC, CLOSE) since OBR's
+ *  ~500 limit applies to the total command array length. */
+export function getTotalCommandCount(): number {
   if (!accumulated) return 0;
   ensureCache();
   return cachedVertexCount;
@@ -155,40 +161,93 @@ export function restoreFromPathCommands(commands: PathCommand[]): void {
 }
 
 /**
- * Apply Douglas-Peucker simplification to the accumulated path.
+ * Apply Douglas-Peucker simplification to the accumulated path,
+ * preserving native curve commands (QUAD, CUBIC, CONIC).
  *
- * Converts to polylines, simplifies each, and rebuilds the path.
- * Winding direction is preserved because simplify-js only removes
- * intermediate points without reordering.
+ * Only consecutive runs of LINE commands are simplified.  Curve commands
+ * pass through unchanged — they encode far more visual information per
+ * command than line segments (e.g. a single CONIC can represent an entire
+ * circular arc that would otherwise cost 20–40 LINE commands).
+ *
+ * This dramatically reduces command count for the same visual fidelity,
+ * extending how much area can be explored before hitting OBR's ~500
+ * command ceiling.
  */
 function simplifyAccumulated(tolerance: number): void {
   if (!accumulated || !ck) return;
 
   const commands = PathHelpers.skPathToPathCommands(accumulated);
-  const polylines = PathHelpers.commandsToPolylines(ck, commands, 10);
-
   const newPath = new ck.Path();
 
-  for (let verts of polylines) {
-    if (verts.length < 3) continue;
+  // Track current position so we know the start of each LINE run
+  let curX = 0, curY = 0;
 
-    // Strip duplicate closing vertex
-    const first = verts[0];
-    const last = verts[verts.length - 1];
-    if ((last.x - first.x) ** 2 + (last.y - first.y) ** 2 < 1) {
-      verts = verts.slice(0, -1);
+  // Accumulate consecutive LINE endpoints for batch simplification.
+  // lineRun[0] is always the starting point (current position before
+  // the first LINE in the run); lineRun[1..n] are LINE endpoints.
+  let lineRun: { x: number; y: number }[] = [];
+
+  function flushLineRun() {
+    if (lineRun.length <= 1) {
+      lineRun = [];
+      return;
     }
-    if (verts.length < 3) continue;
-
-    const simplified = simplify(verts, tolerance, true);
-    if (simplified.length < 3) continue;
-
-    newPath.moveTo(simplified[0].x, simplified[0].y);
+    if (lineRun.length === 2) {
+      // Single line segment — emit directly, nothing to simplify
+      newPath.lineTo(lineRun[1].x, lineRun[1].y);
+      lineRun = [];
+      return;
+    }
+    // Simplify the run (includes start point); skip first point
+    // (already the current path position) and emit the rest
+    const simplified = simplify(lineRun, tolerance, true);
     for (let i = 1; i < simplified.length; i++) {
       newPath.lineTo(simplified[i].x, simplified[i].y);
     }
-    newPath.close();
+    lineRun = [];
   }
+
+  for (const cmd of commands) {
+    switch (cmd[0]) {
+      case Command.MOVE:
+        flushLineRun();
+        newPath.moveTo(cmd[1], cmd[2]);
+        curX = cmd[1]; curY = cmd[2];
+        break;
+
+      case Command.LINE:
+        if (lineRun.length === 0) {
+          lineRun.push({ x: curX, y: curY });
+        }
+        lineRun.push({ x: cmd[1], y: cmd[2] });
+        curX = cmd[1]; curY = cmd[2];
+        break;
+
+      case Command.QUAD:
+        flushLineRun();
+        newPath.quadTo(cmd[1], cmd[2], cmd[3], cmd[4]);
+        curX = cmd[3]; curY = cmd[4];
+        break;
+
+      case Command.CONIC:
+        flushLineRun();
+        newPath.conicTo(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5]);
+        curX = cmd[3]; curY = cmd[4];
+        break;
+
+      case Command.CUBIC:
+        flushLineRun();
+        newPath.cubicTo(cmd[1], cmd[2], cmd[3], cmd[4], cmd[5], cmd[6]);
+        curX = cmd[5]; curY = cmd[6];
+        break;
+
+      case Command.CLOSE:
+        flushLineRun();
+        newPath.close();
+        break;
+    }
+  }
+  flushLineRun();
 
   accumulated.delete();
   accumulated = newPath;
