@@ -1,21 +1,27 @@
 # Dynamic Fog Plus — Progress
 
-## Last Session: 2026-03-10
+## Last Session: 2026-03-12
 
 ### Completed This Session
-- PRIMARY/SECONDARY light type distinction implemented in `positionTracker.ts`
-- SECONDARY lights persist their full illuminated area when a PC has LoS (any distance)
-- `persistDistantLights` toggle added to PersistenceSettings + action popover UI (default: true)
-- Removed `buildVisualBoundary()` stroke expansion (caused CanvasKit dash() errors)
-- Fog item strokeWidth changed from 0 to 1 with strokeOpacity 0 (avoids OBR dash() bug)
-- Persistence radius scaling: hard-edge 90%, soft-edge 80%, grid-boundary snapped
-- Undo Reset bug fixed (lastDiscardTimestamp tracking)
-- Vite manifest version sync plugin added
-- Retrace brief written and compatibility analysis completed (`c:\Coding\Retrace\retrace-brief.md`)
+- **OBR 500-command ceiling discovered and fixed**: OBR silently rejects Path item updates when total command count exceeds ~500. Previous thresholds (1500/3000/8000) were catastrophically wrong.
+- **Curve-preserving simplification**: `simplifyAccumulated()` now only applies Douglas-Peucker to runs of consecutive LINE commands, passing native curves (CONIC, CUBIC, QUAD) through unchanged. ~3.5x command reduction (101→29 for overlapping circles, 4 for full circle, 2 per doorway arc).
+- **Command-based budget**: Renamed `getTotalVertexCount()` → `getTotalCommandCount()`, counts ALL commands including CLOSE. New thresholds: soft=200, hard=350, reject=450.
+- **Removed unnecessary concurrency guard**: `computeInFlight` flag in positionTracker was blocking async I/O for ~150ms, causing patchy updates. Accumulator mutations are synchronous and safe without it.
+- **Web Worker tuning**: Raised `MIN_SHAPES_FOR_WORKERS` from 4 to 12, added PathOp error checking in workers.
+- **Action UI**: Label changed from "Vertices:" to "Cmds:" to reflect command count metric.
+- Deployed and verified: persistence updates are snappy and responsive.
 
-### Untested (needs deployment verification)
-- SECONDARY light full-pool persistence — the LoS path now extends to `dist + attenuationRadius + cachedDpi` and is passed to `computeSecondaryIntersection` instead of the PRIMARY's small persistence path
-- `persistDistantLights` toggle in the action popover (when false, SECONDARY lights are entirely ignored for persistence)
+### Known Issues
+- Single `[Worker] PathOp.Union failed for frustum` warning appeared once — not yet investigated, may be a rare edge case in shadow frustum computation.
+
+### Previous Session: 2026-03-10
+- PRIMARY/SECONDARY light type distinction implemented
+- SECONDARY lights persist full illuminated area when PC has LoS
+- `persistDistantLights` toggle added (default: true)
+- Removed `buildVisualBoundary()` stroke expansion
+- Fog item strokeWidth:1/strokeOpacity:0 workaround
+- Persistence radius scaling: hard-edge 90%, soft-edge 80%, grid-snapped
+- Undo Reset bug fixed, Vite manifest version sync plugin added
 
 ### Overall State
 - Fork of official dynamic fog extension with persistent reveal feature
@@ -41,8 +47,8 @@
 - [ ] Interaction with Aurora if both are active on the same map item
 
 ## Next Steps
-- [ ] Deploy and test SECONDARY light persistence at distance with toggle
+- [ ] Investigate worker PathOp.Union frustum failure (single occurrence, needs reproduction)
+- [ ] Performance benchmark on larger scenes (15-wall scene: ~45ms avg, no serial baseline)
 - [ ] Consider building Retrace (fog eraser) tool into the extension
 - [ ] Consider per-player vision (local fog cutouts approach)
-- [ ] Consider Web Worker parallelisation for multi-token scenarios
 - [ ] Greyscale memory zone is a candidate feature

@@ -88,8 +88,13 @@ function computeBatch(CK: CanvasKit, req: ComputeMessage): Float32Array {
     if (!combined) {
       combined = shapePath;
     } else {
+      const backup: SkPath = combined.copy();
       if (!combined.op(shapePath, CK.PathOp.Union)) {
-        console.warn("[Worker] PathOp.Union failed for shape");
+        console.warn("[Worker] PathOp.Union failed for shape, skipping");
+        combined.delete();
+        combined = backup;
+      } else {
+        backup.delete();
       }
       shapePath.delete();
     }
@@ -102,8 +107,13 @@ function computeBatch(CK: CanvasKit, req: ComputeMessage): Float32Array {
       if (!combined) {
         combined = frustumPath;
       } else {
+        const backup: SkPath = combined.copy();
         if (!combined.op(frustumPath, CK.PathOp.Union)) {
-          console.warn("[Worker] PathOp.Union failed for frustum");
+          console.warn("[Worker] PathOp.Union failed for frustum, skipping");
+          combined.delete();
+          combined = backup;
+        } else {
+          backup.delete();
         }
         frustumPath.delete();
       }

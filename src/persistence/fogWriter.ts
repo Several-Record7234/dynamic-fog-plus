@@ -35,8 +35,9 @@ export async function writePersistenceFogItem(
         }
       });
       return;
-    } catch {
+    } catch (err) {
       // Item may have been deleted externally; fall through to create
+      console.warn(`[Persistence] updateItems failed (${commands.length} cmds), falling through to create:`, err);
       persistenceItemId = null;
     }
   }

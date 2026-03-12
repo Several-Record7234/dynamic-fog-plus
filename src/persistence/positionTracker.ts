@@ -164,6 +164,7 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
 
   // Subscribe to scene metadata changes (settings updates and reset signals)
   const unsubMeta = OBR.scene.onMetadataChange((metadata) => {
+    const prevEnabled = settings.enabled;
     const prevOpacity = settings.revealOpacity;
     settings = getMetadata<PersistenceSettings>(
       metadata,
@@ -171,8 +172,22 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
       DEFAULT_PERSISTENCE_SETTINGS
     );
 
+    // Toggle fog item visibility when enabled state changes
+    if (settings.enabled !== prevEnabled) {
+      if (!settings.enabled) {
+        // Disabled — remove the fog item but keep accumulator state
+        removePersistenceFogItem();
+      } else {
+        // Re-enabled — restore the fog item from accumulated state
+        const commands = getAccumulatedPathCommands();
+        if (commands && commands.length > 0) {
+          writePersistenceFogItem(commands, settings.revealOpacity);
+        }
+      }
+    }
+
     // Apply opacity change immediately to existing fog item
-    if (settings.revealOpacity !== prevOpacity) {
+    if (settings.revealOpacity !== prevOpacity && settings.enabled) {
       updatePersistenceOpacity(settings.revealOpacity);
     }
 
@@ -568,6 +583,9 @@ async function computeAndAccumulate(
   // Write to the FOG layer
   const commands = getAccumulatedPathCommands();
   if (commands && commands.length > 0) {
+    if (commands.length > 400) {
+      console.warn(`[Persistence] Writing ${commands.length} commands (approaching OBR limit)`);
+    }
     await writePersistenceFogItem(commands, settings.revealOpacity);
   }
 

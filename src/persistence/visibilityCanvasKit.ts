@@ -32,7 +32,7 @@ export function computeVisibilityPath(
   outerAngle: number = 360,
   rotationDeg: number = 0
 ): SkPath {
-  const lightPath = new CK.Path();
+  let lightPath = new CK.Path();
 
   if (outerAngle >= 360) {
     lightPath.addCircle(origin.x, origin.y, radius);
@@ -58,16 +58,28 @@ export function computeVisibilityPath(
     // creates a fresh path each iteration and we discard it after use.
     fogPath.transform(...MathM.fromItem(item));
 
-    if (!lightPath.op(fogPath, CK.PathOp.Difference)) {
-      shapeOpFails++;
-      console.warn(`[Persistence] PathOp.Difference FAILED for shape "${item.name || item.id.slice(0, 8)}"`);
+    {
+      const backup = lightPath.copy();
+      if (!lightPath.op(fogPath, CK.PathOp.Difference)) {
+        shapeOpFails++;
+        console.warn(`[Persistence] PathOp.Difference FAILED for shape "${item.name || item.id.slice(0, 8)}", skipping`);
+        lightPath.delete();
+        lightPath = backup;
+      } else {
+        backup.delete();
+      }
     }
 
     const frustumPath = buildShadowFrustum(CK, fogPath, origin, farDist);
     if (frustumPath) {
+      const backup = lightPath.copy();
       if (!lightPath.op(frustumPath, CK.PathOp.Difference)) {
         frustumOpFails++;
-        console.warn(`[Persistence] PathOp.Difference FAILED for frustum of "${item.name || item.id.slice(0, 8)}"`);
+        console.warn(`[Persistence] PathOp.Difference FAILED for frustum of "${item.name || item.id.slice(0, 8)}", skipping`);
+        lightPath.delete();
+        lightPath = backup;
+      } else {
+        backup.delete();
       }
       frustumPath.delete();
     }
@@ -232,7 +244,7 @@ export async function computeVisibilityPathParallel(
   outerAngle: number = 360,
   rotationDeg: number = 0
 ): Promise<SkPath> {
-  const lightPath = new CK.Path();
+  let lightPath = new CK.Path();
 
   if (outerAngle >= 360) {
     lightPath.addCircle(origin.x, origin.y, radius);
@@ -250,7 +262,14 @@ export async function computeVisibilityPathParallel(
     if (cmds.length === 0) continue;
     const subPath = CK.Path.MakeFromCmds(cmds);
     if (!subPath) continue;
-    lightPath.op(subPath, CK.PathOp.Difference);
+    const backup = lightPath.copy();
+    if (!lightPath.op(subPath, CK.PathOp.Difference)) {
+      console.warn("[Persistence] PathOp.Difference FAILED for worker batch, skipping");
+      lightPath.delete();
+      lightPath = backup;
+    } else {
+      backup.delete();
+    }
     subPath.delete();
   }
 
