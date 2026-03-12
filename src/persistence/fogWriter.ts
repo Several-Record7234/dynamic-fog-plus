@@ -71,7 +71,7 @@ export async function writePersistenceFogItem(
   // fog shape visually overrides the cutout beneath it.
   const path = buildPath()
     .commands(commands)
-    .fillRule("evenodd")
+    .fillRule("nonzero")
     .layer("FOG")
     .visible(false) // visible: false = fog cutout (reveals map)
     .locked(true)
