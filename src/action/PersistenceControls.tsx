@@ -337,6 +337,15 @@ export function PersistenceControls() {
                     >
                       {perf.totalMs}ms
                     </Box>
+                    {perf.parallel && (
+                      <Box
+                        component="span"
+                        sx={{ color: "#4caf50", fontWeight: 600, ml: "2px" }}
+                        title="Parallel workers active"
+                      >
+                        W
+                      </Box>
+                    )}
                   </>
                 )}
               </Typography>

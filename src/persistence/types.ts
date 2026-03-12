@@ -75,6 +75,8 @@ export interface PersistencePerf {
   vertexCount: number;
   /** Accumulator strategy applied this cycle */
   status: "ok" | "simplified" | "region_split" | "rejected";
+  /** Whether this cycle used parallel worker computation */
+  parallel?: boolean;
 }
 
 export const DEFAULT_PERSISTENCE_PERF: PersistencePerf = {

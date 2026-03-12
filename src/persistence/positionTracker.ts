@@ -9,7 +9,14 @@ import { getMetadata } from "../util/getMetadata";
 import type { LightConfig } from "../types/LightConfig";
 import type { TrackedToken, PersistenceSettings } from "./types";
 import { DEFAULT_PERSISTENCE_SETTINGS } from "./types";
-import { computeVisibilityPath } from "./visibilityCanvasKit";
+import { computeVisibilityPath, computeVisibilityPathParallel } from "./visibilityCanvasKit";
+import {
+  VisibilityWorkerPool,
+  prepareFogShapes,
+  shouldUseWorkers,
+} from "./workerPool";
+import type { PreparedFogShape } from "./workerPool";
+import wasmUrl from "canvaskit-wasm/bin/full/canvaskit.wasm?url";
 import {
   initAccumulator,
   accumulateVisibilityPath,
@@ -58,6 +65,12 @@ let canvasKit: CanvasKit | null = null;
  */
 let cachedFogItems: Item[] = [];
 
+/** Worker pool for parallel visibility computation */
+let workerPool: VisibilityWorkerPool | null = null;
+
+/** Pre-processed fog shapes for worker consumption (updated when fog cache changes) */
+let preparedShapes: PreparedFogShape[] = [];
+
 /**
  * Initialize the position tracker.
  * Only runs on the GM's client to avoid write conflicts — every connected
@@ -81,6 +94,18 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
     restoreFromPathCommands(existingCommands);
     console.log(`[Persistence] Restored existing persistence geometry (${existingCommands.length} commands)`);
   }
+
+  // Initialize worker pool (non-blocking — parallel compute is used when ready)
+  workerPool = new VisibilityWorkerPool();
+  workerPool.init(wasmUrl).then(() => {
+    console.log(`[Persistence] Worker pool ready (${workerPool!.size} workers)`);
+    OBR.scene.setMetadata({
+      [getPluginId("persistence-workers")]: workerPool!.size,
+    });
+  }).catch((err) => {
+    console.warn("[Persistence] Worker pool init failed, using single-threaded fallback:", err);
+    workerPool = null;
+  });
 
   // Get initial DPI
   OBR.scene.grid.getDpi().then((dpi) => {
@@ -118,6 +143,10 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
     const fogCount = items.reduce((n, i) => n + (i.layer === "FOG" ? 1 : 0), 0);
     if (fogCount !== cachedFogItems.length) {
       cachedFogItems = items.filter((i) => i.layer === "FOG");
+      // Re-prepare fog shapes for worker consumption
+      if (canvasKit) {
+        preparedShapes = prepareFogShapes(canvasKit, cachedFogItems);
+      }
     }
     handleItemsChange(items);
   });
@@ -125,6 +154,9 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
   // Seed the fog item cache
   OBR.scene.items.getItems().then((items) => {
     cachedFogItems = items.filter((i) => i.layer === "FOG");
+    if (canvasKit) {
+      preparedShapes = prepareFogShapes(canvasKit, cachedFogItems);
+    }
     console.log(
       `[Persistence] Initial FOG item cache: ${cachedFogItems.length} items`
     );
@@ -194,6 +226,7 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
     if (!ready) {
       trackedTokens.clear();
       cachedFogItems = [];
+      preparedShapes = [];
       resetAccumulator();
     } else {
       // Reload settings and DPI on new scene
@@ -236,7 +269,12 @@ export function destroyPositionTracker(): void {
   unsubscribes = [];
   trackedTokens.clear();
   cachedFogItems = [];
+  preparedShapes = [];
   resetAccumulator();
+  if (workerPool) {
+    workerPool.destroy();
+    workerPool = null;
+  }
   canvasKit = null;
 }
 
@@ -471,14 +509,26 @@ async function computeAndAccumulate(
   const scaledRadius = tracked.attenuationRadius * radiusScale;
   const persistenceRadius = Math.round(scaledRadius / cachedDpi) * cachedDpi;
 
-  const visPath = computeVisibilityPath(
-    canvasKit,
-    position,
-    persistenceRadius,
-    cachedFogItems,
-    tracked.outerAngle,
-    tracked.lightRotation
-  );
+  // Use parallel workers when pool is ready and there are enough fog shapes
+  const useParallel = shouldUseWorkers(workerPool, preparedShapes.length);
+  const visPath = useParallel
+    ? await computeVisibilityPathParallel(
+        canvasKit,
+        position,
+        persistenceRadius,
+        preparedShapes,
+        workerPool!,
+        tracked.outerAngle,
+        tracked.lightRotation
+      )
+    : computeVisibilityPath(
+        canvasKit,
+        position,
+        persistenceRadius,
+        cachedFogItems,
+        tracked.outerAngle,
+        tracked.lightRotation
+      );
 
   const t1 = performance.now();
 
@@ -535,6 +585,7 @@ async function computeAndAccumulate(
       wallCount: cachedFogItems.length,
       vertexCount,
       status: accResult.status,
+      parallel: useParallel,
     },
   });
 

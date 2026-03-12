@@ -5,12 +5,13 @@ import { PathHelpers } from "../background/util/PathHelpers";
 import { isDrawing } from "../types/Drawing";
 import type { Drawing } from "../types/Drawing";
 import { PERSISTENCE_METADATA_KEY } from "./fogWriter";
+import type { VisibilityWorkerPool, PreparedFogShape } from "./workerPool";
 
 /**
  * How far beyond the light radius to project shadow vertices.
  * 3× ensures the shadow frustum extends well past the boundary circle.
  */
-const SHADOW_PROJECTION_FACTOR = 3;
+export const SHADOW_PROJECTION_FACTOR = 3;
 
 /**
  * Compute visibility using CanvasKit path boolean operations.
@@ -210,4 +211,48 @@ function addSectorToPath(
   }
 
   path.close();
+}
+
+/**
+ * Parallel visibility computation using Web Workers.
+ *
+ * Workers compute the union of (fog shape + shadow frustum) for batches
+ * of pre-processed shapes.  The main thread creates the light circle and
+ * subtracts each worker's combined result.
+ *
+ * Mathematically equivalent to the sequential version:
+ *   lightCircle - A₁ - A₂ - ... = lightCircle - (A₁ ∪ A₂ ∪ ...)
+ */
+export async function computeVisibilityPathParallel(
+  CK: CanvasKit,
+  origin: Vector2,
+  radius: number,
+  preparedShapes: PreparedFogShape[],
+  pool: VisibilityWorkerPool,
+  outerAngle: number = 360,
+  rotationDeg: number = 0
+): Promise<SkPath> {
+  const lightPath = new CK.Path();
+
+  if (outerAngle >= 360) {
+    lightPath.addCircle(origin.x, origin.y, radius);
+  } else {
+    addSectorToPath(lightPath, origin, radius, outerAngle, rotationDeg);
+  }
+
+  const farDist = radius * SHADOW_PROJECTION_FACTOR;
+
+  // Distribute shapes to workers and collect results
+  const batchResults = await pool.computeBatches(preparedShapes, origin, farDist);
+
+  // Subtract each worker's combined result from the light circle
+  for (const cmds of batchResults) {
+    if (cmds.length === 0) continue;
+    const subPath = CK.Path.MakeFromCmds(cmds);
+    if (!subPath) continue;
+    lightPath.op(subPath, CK.PathOp.Difference);
+    subPath.delete();
+  }
+
+  return lightPath;
 }
