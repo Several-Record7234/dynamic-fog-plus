@@ -53,21 +53,16 @@ export function computeVisibilityPath(
     const fogPath = PathHelpers.drawingToSkPath(drawing, CK);
     if (!fogPath) continue;
 
-    // Use the fill path directly for the visual boundary.
-    // WallHelpers expands with stroke() but that triggers CanvasKit dash()
-    // errors on some fog shapes.  The fill-only boundary is at most half a
-    // stroke width smaller — negligible given the radius scaling we apply.
-    const visualPath = fogPath.copy();
+    // Transform fogPath in place — no copy needed since drawingToSkPath
+    // creates a fresh path each iteration and we discard it after use.
+    fogPath.transform(...MathM.fromItem(item));
 
-    const transform = MathM.fromItem(item);
-    visualPath.transform(...transform);
-
-    if (!lightPath.op(visualPath, CK.PathOp.Difference)) {
+    if (!lightPath.op(fogPath, CK.PathOp.Difference)) {
       shapeOpFails++;
       console.warn(`[Persistence] PathOp.Difference FAILED for shape "${item.name || item.id.slice(0, 8)}"`);
     }
 
-    const frustumPath = buildShadowFrustum(CK, visualPath, origin, farDist);
+    const frustumPath = buildShadowFrustum(CK, fogPath, origin, farDist);
     if (frustumPath) {
       if (!lightPath.op(frustumPath, CK.PathOp.Difference)) {
         frustumOpFails++;
@@ -77,7 +72,6 @@ export function computeVisibilityPath(
     }
 
     fogPath.delete();
-    visualPath.delete();
     shapeCount++;
   }
 
@@ -130,29 +124,41 @@ function buildShadowFrustum(
     }
     if (verts.length < 3) continue;
 
-    // Project each vertex away from the light source
-    const projected = verts.map((v) => projectVertex(v, origin, farDist));
-
     // Build one quad per edge with consistent winding direction.
-    // Edges on opposite sides of the shape naturally produce quads with
-    // opposite winding.  We compute signed area and reverse vertex order
-    // for CCW quads so all quads are CW (positive signed area in screen
-    // coords).  This ensures overlapping quads accumulate winding rather
-    // than cancelling.
+    // Vertex projection is computed inline to avoid allocating an
+    // intermediate array of projected Vector2 objects.
     for (let i = 0; i < verts.length; i++) {
       const j = (i + 1) % verts.length;
-      const a = verts[i], b = verts[j], c = projected[j], d = projected[i];
-      const sa = quadSignedArea2x(a, b, c, d);
+      const ax = verts[i].x, ay = verts[i].y;
+      const bx = verts[j].x, by = verts[j].y;
+
+      // Project a (vertex i) away from origin
+      const dax = ax - origin.x, day = ay - origin.y;
+      const lenA = Math.sqrt(dax * dax + day * day);
+      const sA = lenA < 0.01 ? farDist : farDist / lenA;
+      const dx = origin.x + dax * sA, dy = origin.y + day * sA;
+
+      // Project b (vertex j) away from origin
+      const dbx = bx - origin.x, dby = by - origin.y;
+      const lenB = Math.sqrt(dbx * dbx + dby * dby);
+      const sB = lenB < 0.01 ? farDist : farDist / lenB;
+      const cx = origin.x + dbx * sB, cy = origin.y + dby * sB;
+
+      // Signed area of quad (ax,ay)→(bx,by)→(cx,cy)→(dx,dy)
+      // Positive = CW in screen coords (y-down)
+      const sa = (ax * by - bx * ay) + (bx * cy - cx * by)
+               + (cx * dy - dx * cy) + (dx * ay - ax * dy);
+
       if (sa >= 0) {
-        frustumPath.moveTo(a.x, a.y);
-        frustumPath.lineTo(b.x, b.y);
-        frustumPath.lineTo(c.x, c.y);
-        frustumPath.lineTo(d.x, d.y);
+        frustumPath.moveTo(ax, ay);
+        frustumPath.lineTo(bx, by);
+        frustumPath.lineTo(cx, cy);
+        frustumPath.lineTo(dx, dy);
       } else {
-        frustumPath.moveTo(a.x, a.y);
-        frustumPath.lineTo(d.x, d.y);
-        frustumPath.lineTo(c.x, c.y);
-        frustumPath.lineTo(b.x, b.y);
+        frustumPath.moveTo(ax, ay);
+        frustumPath.lineTo(dx, dy);
+        frustumPath.lineTo(cx, cy);
+        frustumPath.lineTo(bx, by);
       }
       frustumPath.close();
     }
@@ -169,31 +175,6 @@ function buildShadowFrustum(
   frustumPath.simplify();
 
   return frustumPath;
-}
-
-/**
- * Compute 2× the signed area of quadrilateral ABCD (shoelace formula).
- * Positive = clockwise in screen coordinates (y-down).
- */
-function quadSignedArea2x(a: Vector2, b: Vector2, c: Vector2, d: Vector2): number {
-  return (
-    (a.x * b.y - b.x * a.y) +
-    (b.x * c.y - c.x * b.y) +
-    (c.x * d.y - d.x * c.y) +
-    (d.x * a.y - a.x * d.y)
-  );
-}
-
-/** Project a vertex away from the light source to a fixed distance */
-function projectVertex(v: Vector2, origin: Vector2, farDist: number): Vector2 {
-  const dx = v.x - origin.x;
-  const dy = v.y - origin.y;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 0.01) {
-    return { x: origin.x + farDist, y: origin.y };
-  }
-  const scale = farDist / len;
-  return { x: origin.x + dx * scale, y: origin.y + dy * scale };
 }
 
 /**

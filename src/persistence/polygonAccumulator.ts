@@ -21,6 +21,29 @@ let ck: CanvasKit | null = null;
 let unionsSinceSimplify = 0;
 
 /**
+ * Serialisation cache — avoids repeated skPathToPathCommands() calls.
+ * Invalidated whenever the accumulated path mutates (union, simplify, reset).
+ */
+let cachedCommands: PathCommand[] | null = null;
+let cachedVertexCount = 0;
+let cacheValid = false;
+
+function invalidateCache(): void {
+  cachedCommands = null;
+  cacheValid = false;
+}
+
+function ensureCache(): void {
+  if (cacheValid || !accumulated) return;
+  cachedCommands = PathHelpers.skPathToPathCommands(accumulated);
+  cachedVertexCount = 0;
+  for (const cmd of cachedCommands) {
+    if (cmd[0] !== Command.CLOSE) cachedVertexCount++;
+  }
+  cacheValid = true;
+}
+
+/**
  * Vertex budget thresholds.
  *
  * - SIMPLIFY_SOFT:  periodic low-tolerance simplification (imperceptible)
@@ -59,6 +82,7 @@ export function initAccumulator(CK: CanvasKit): void {
 export function accumulateVisibilityPath(visPath: SkPath): AccumulateResult {
   if (!ck) throw new Error("Accumulator not initialized — call initAccumulator first");
 
+  // Use cached count (no serialisation) for the reject check
   const currentCount = getTotalVertexCount();
 
   if (currentCount >= REJECT_VERTEX_COUNT) {
@@ -71,6 +95,8 @@ export function accumulateVisibilityPath(visPath: SkPath): AccumulateResult {
     accumulated.op(visPath, ck.PathOp.Union);
   }
 
+  // Path mutated — invalidate cache and recount once
+  invalidateCache();
   unionsSinceSimplify++;
   const newCount = getTotalVertexCount();
 
@@ -95,18 +121,15 @@ export function accumulateVisibilityPath(visPath: SkPath): AccumulateResult {
  */
 export function getAccumulatedPathCommands(): PathCommand[] | null {
   if (!accumulated) return null;
-  return PathHelpers.skPathToPathCommands(accumulated);
+  ensureCache();
+  return cachedCommands;
 }
 
-/** Get the total vertex count of the accumulated path */
+/** Get the total vertex count of the accumulated path (cached, no serialisation) */
 export function getTotalVertexCount(): number {
   if (!accumulated) return 0;
-  const cmds = PathHelpers.skPathToPathCommands(accumulated);
-  let count = 0;
-  for (const cmd of cmds) {
-    if (cmd[0] !== Command.CLOSE) count++;
-  }
-  return count;
+  ensureCache();
+  return cachedVertexCount;
 }
 
 /** Reset the accumulator (clear all persistence data) */
@@ -116,6 +139,7 @@ export function resetAccumulator(): void {
     accumulated = null;
   }
   unionsSinceSimplify = 0;
+  invalidateCache();
 }
 
 /**
@@ -127,6 +151,7 @@ export function restoreFromPathCommands(commands: PathCommand[]): void {
   resetAccumulator();
   if (commands.length === 0) return;
   accumulated = pathCommandsToSkPath(ck, commands);
+  invalidateCache();
 }
 
 /**
@@ -167,6 +192,7 @@ function simplifyAccumulated(tolerance: number): void {
 
   accumulated.delete();
   accumulated = newPath;
+  invalidateCache();
 }
 
 /** Convert OBR PathCommands to a CanvasKit Path */

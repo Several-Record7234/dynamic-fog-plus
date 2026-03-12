@@ -111,9 +111,14 @@ export async function initPositionTracker(CK: CanvasKit): Promise<void> {
     );
   });
 
-  // Subscribe to scene item changes
+  // Subscribe to scene item changes.
+  // Rebuild the FOG cache only when the count changes (avoids allocating
+  // a new filtered array on every unrelated item change).
   const unsubItems = OBR.scene.items.onChange((items) => {
-    cachedFogItems = items.filter((i) => i.layer === "FOG");
+    const fogCount = items.reduce((n, i) => n + (i.layer === "FOG" ? 1 : 0), 0);
+    if (fogCount !== cachedFogItems.length) {
+      cachedFogItems = items.filter((i) => i.layer === "FOG");
+    }
     handleItemsChange(items);
   });
 
