@@ -3,13 +3,14 @@
 ## Last Session: 2026-03-13
 
 ### Completed This Session
-- **Flicker interop**: DFP now detects `com.flicker/fog-light` metadata alongside its own keys, treating Flicker lights identically for fog computation, persistence, and light overlays
-- **Namespace migration**: New DFP lights write to `rodeo.owlbear.dynamic-fog-plus/light`; reads check new key, legacy `rodeo.owlbear.dynamic-fog/light`, and Flicker key in priority order
-- **Light key helpers**: New `src/util/lightKeys.ts` — `hasLightConfig`, `readLightConfig`, `getLightKey` centralise multi-key detection across all consumers
-- **Fill rule loop-closure fix**: Changed persistence fog item from `evenodd` to `nonzero` fill rule — fixes gaps where corridors loop back to form islands
-- **EvenOdd normalization for fog shapes**: All fog paths set to `EvenOdd` before path ops, making visibility immune to CW/CCW drawing direction
-- **Persistence toggle preserves shape**: Toggle now flips fog item `visible` (cut/uncut) instead of deleting — shape survives reload naturally
-- **Initial position persistence**: Settings load triggers initial item scan so tokens get persistence at their starting position
+- **Flicker interop reversed**: Removed DFP reading Flicker's `com.flicker/fog-light` key — Flicker now reads DFP's metadata keys directly instead
+- **Namespace migration**: New DFP lights write to `rodeo.owlbear.dynamic-fog-plus/light`; reads check new key + legacy `rodeo.owlbear.dynamic-fog/light`
+- **Light key helpers**: `src/util/lightKeys.ts` — `hasLightConfig`, `readLightConfig`, `getLightKey` centralise multi-key detection
+- **Context menu filter fix**: OBR's `some` filter alone with `!=` operator silently fails — replaced with multiple icon entries using `every` (recorded in shared SKILL.md)
+- **Fill rule loop-closure fix**: Persistence fog item `evenodd` → `nonzero` — fixes gaps where corridors loop back to form islands
+- **EvenOdd normalization for fog shapes**: All fog paths set to `EvenOdd` before path ops, immune to CW/CCW drawing direction
+- **Persistence toggle preserves shape**: Flips fog item `visible` (cut/uncut) instead of deleting — survives reload
+- **Initial position persistence**: Settings load triggers initial item scan
 
 ### Known Issues
 - Recurring frustum PathOp failures (union and difference) for certain fog shapes — harmless due to backup/restore, but shadow may be missing for affected shapes at some token positions
