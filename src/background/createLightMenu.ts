@@ -3,7 +3,6 @@ import { getPluginId } from "../util/getPluginId";
 import {
   DFP_LIGHT_KEY,
   LEGACY_LIGHT_KEY,
-  FLICKER_LIGHT_KEY,
 } from "../util/lightKeys";
 
 import lightOnIcon from "../assets/light-on.svg";
@@ -21,7 +20,6 @@ export function createLightMenu() {
             { key: "type", value: "IMAGE" },
             { key: ["metadata", DFP_LIGHT_KEY], value: undefined },
             { key: ["metadata", LEGACY_LIGHT_KEY], value: undefined },
-            { key: ["metadata", FLICKER_LIGHT_KEY], value: undefined },
           ],
           permissions: ["UPDATE"],
         },
@@ -35,7 +33,6 @@ export function createLightMenu() {
             { key: "shapeType", value: "CIRCLE" },
             { key: ["metadata", DFP_LIGHT_KEY], value: undefined },
             { key: ["metadata", LEGACY_LIGHT_KEY], value: undefined },
-            { key: ["metadata", FLICKER_LIGHT_KEY], value: undefined },
           ],
           permissions: ["UPDATE"],
         },
@@ -74,7 +71,6 @@ export function createLightMenu() {
           some: [
             { key: ["metadata", DFP_LIGHT_KEY], value: undefined, operator: "!=" },
             { key: ["metadata", LEGACY_LIGHT_KEY], value: undefined, operator: "!=" },
-            { key: ["metadata", FLICKER_LIGHT_KEY], value: undefined, operator: "!=" },
           ],
           permissions: ["UPDATE"],
         },

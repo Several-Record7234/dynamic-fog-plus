@@ -8,14 +8,10 @@ export const DFP_LIGHT_KEY = "rodeo.owlbear.dynamic-fog-plus/light";
 /** Legacy DFP namespace — read-only backwards compatibility */
 export const LEGACY_LIGHT_KEY = "rodeo.owlbear.dynamic-fog/light";
 
-/** Flicker extension namespace — read-only interop */
-export const FLICKER_LIGHT_KEY = "com.flicker/fog-light";
-
 /** All light metadata keys, checked in priority order */
 export const LIGHT_KEYS = [
   DFP_LIGHT_KEY,
   LEGACY_LIGHT_KEY,
-  FLICKER_LIGHT_KEY,
 ] as const;
 
 /** Returns true if the item has any recognised light config */
