@@ -10,9 +10,15 @@
 - **Web Worker tuning**: Raised `MIN_SHAPES_FOR_WORKERS` from 4 to 12, added PathOp error checking in workers.
 - **Action UI**: Label changed from "Vertices:" to "Cmds:" to reflect command count metric.
 - Deployed and verified: persistence updates are snappy and responsive.
+- **PathOp failure recovery**: All `path.op()` calls backup before attempting, restore on failure. Prevents corrupt WASM state from cascading.
+- **Persistence toggle fixes cut state**: Flips fog item `visible` property instead of delete/recreate. Survives reload naturally.
+- **Fill rule fix (evenodd→nonzero)**: Persistence fog item uses `nonzero` fill rule to match CanvasKit union output. Fixes loop junction gaps.
+- **EvenOdd normalization for fog shapes**: All fog paths set to `EvenOdd` fill type before path ops, making computation immune to CW/CCW drawing direction.
+- **Initial position persistence**: Settings load now triggers initial item scan so tokens get their starting position persisted without needing to move first.
+- Full complex map explored: 304 commands, <50ms processing, 15 fog shapes.
 
 ### Known Issues
-- Single `[Worker] PathOp.Union failed for frustum` warning appeared once — not yet investigated, may be a rare edge case in shadow frustum computation.
+- Recurring frustum PathOp failures (union and difference) for certain fog shapes — harmless due to backup/restore, but shadow may be missing for affected shapes at some token positions.
 
 ### Previous Session: 2026-03-10
 - PRIMARY/SECONDARY light type distinction implemented
