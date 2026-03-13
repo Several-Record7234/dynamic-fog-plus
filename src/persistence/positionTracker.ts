@@ -7,6 +7,7 @@ import type { CanvasKit } from "canvaskit-wasm";
 import { getPluginId } from "../util/getPluginId";
 import { getMetadata } from "../util/getMetadata";
 import type { LightConfig } from "../types/LightConfig";
+import { hasLightConfig, readLightConfig } from "../util/lightKeys";
 import type { TrackedToken, PersistenceSettings } from "./types";
 import { DEFAULT_PERSISTENCE_SETTINGS } from "./types";
 import { computeVisibilityPath, computeVisibilityPathParallel } from "./visibilityCanvasKit";
@@ -354,17 +355,13 @@ async function handleItemsChange(items: Item[]): Promise<void> {
   if (!settings.enabled) return;
 
   const lightTokens = items.filter(
-    (item) => getPluginId("light") in item.metadata
+    (item) => hasLightConfig(item)
   );
 
   // Parse config for all light tokens and split by type
   const tokenConfigs: { token: Item; config: LightConfig; lightType: string }[] = [];
   for (const token of lightTokens) {
-    const config = getMetadata<LightConfig>(
-      token.metadata,
-      getPluginId("light"),
-      {}
-    );
+    const config = readLightConfig(token);
     tokenConfigs.push({
       token,
       config,

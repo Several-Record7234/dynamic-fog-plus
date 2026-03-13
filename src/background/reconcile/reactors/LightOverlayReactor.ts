@@ -1,8 +1,8 @@
 import { Reactor } from "../Reactor";
-import { getPluginId } from "../../../util/getPluginId";
 import { Reconciler } from "../Reconciler";
 import { Item } from "@owlbear-rodeo/sdk";
 import { LightOverlayActor } from "../actors/LightOverlayActor";
+import { hasLightConfig } from "../../../util/lightKeys";
 
 export class LightOverlayReactor extends Reactor {
   constructor(reconciler: Reconciler) {
@@ -10,6 +10,6 @@ export class LightOverlayReactor extends Reactor {
   }
 
   filter(item: Item): boolean {
-    return getPluginId("light") in item.metadata;
+    return hasLightConfig(item);
   }
 }

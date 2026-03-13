@@ -1,15 +1,13 @@
 import Button from "@mui/material/Button";
 import Stack from "@mui/material/Stack";
 import OBR, { GridScale, Item } from "@owlbear-rodeo/sdk";
-import { getPluginId } from "../util/getPluginId";
-
 import { LightOff } from "./icons/LightOff";
 import NumberField from "./util/NumberField";
 import { useEffect, useMemo, useState } from "react";
 import Skeleton from "@mui/material/Skeleton";
-import { getMetadata } from "../util/getMetadata";
 import { LightConfig } from "../types/LightConfig";
 import { isPlainObject } from "./util/isPlainObject";
+import { getLightKey, readLightConfig } from "../util/lightKeys";
 import InputAdornment from "@mui/material/InputAdornment";
 import styled from "@mui/material/styles/styled";
 import FormLabel from "@mui/material/FormLabel";
@@ -98,12 +96,7 @@ function MenuControls({
 }) {
   const config = useMemo(() => {
     for (const item of items) {
-      const config = getMetadata<LightConfig>(
-        item.metadata,
-        getPluginId("light"),
-        {}
-      );
-      return config;
+      return readLightConfig(item);
     }
     return {};
   }, [items]);
@@ -122,7 +115,8 @@ function MenuControls({
   async function handleAttenuationChange(value: number) {
     await OBR.scene.items.updateItems(items, (items) => {
       for (const item of items) {
-        const config = item.metadata[getPluginId("light")];
+        const key = getLightKey(item);
+        const config = key ? item.metadata[key] : null;
         if (isPlainObject(config)) {
           config.attenuationRadius = value;
         }
@@ -134,7 +128,8 @@ function MenuControls({
   async function handleAngleChange(value: "FULL" | "HALF") {
     await OBR.scene.items.updateItems(items, (items) => {
       for (const item of items) {
-        const config = item.metadata[getPluginId("light")];
+        const key = getLightKey(item);
+        const config = key ? item.metadata[key] : null;
         if (isPlainObject(config)) {
           config.innerAngle = value === "FULL" ? 360 : 45;
           config.outerAngle = value === "FULL" ? 360 : 60;
@@ -147,7 +142,8 @@ function MenuControls({
   async function handleEdgeChange(value: "SOFT" | "HARD") {
     await OBR.scene.items.updateItems(items, (items) => {
       for (const item of items) {
-        const config = item.metadata[getPluginId("light")];
+        const key = getLightKey(item);
+        const config = key ? item.metadata[key] : null;
         if (isPlainObject(config)) {
           config.falloff = value === "SOFT" ? 1.5 : 0.2;
         }
@@ -158,7 +154,8 @@ function MenuControls({
   async function handleTypeChange(value: "PRIMARY" | "SECONDARY") {
     await OBR.scene.items.updateItems(items, (items) => {
       for (const item of items) {
-        const config = item.metadata[getPluginId("light")];
+        const key = getLightKey(item);
+        const config = key ? item.metadata[key] : null;
         if (isPlainObject(config)) {
           config.lightType = value;
         }
@@ -169,7 +166,8 @@ function MenuControls({
   async function handleRotationChange(value: number) {
     await OBR.scene.items.updateItems(items, (items) => {
       for (const item of items) {
-        const config = item.metadata[getPluginId("light")];
+        const key = getLightKey(item);
+        const config = key ? item.metadata[key] : null;
         if (isPlainObject(config)) {
           config.rotation = value;
         }
@@ -289,7 +287,8 @@ function MenuControls({
             }
             await OBR.scene.items.updateItems(selection, (items) => {
               for (const item of items) {
-                delete item.metadata[getPluginId("light")];
+                const key = getLightKey(item);
+                if (key) delete item.metadata[key];
               }
             });
           }}

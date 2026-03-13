@@ -1,10 +1,8 @@
 import { Reactor } from "../Reactor";
-import { getPluginId } from "../../../util/getPluginId";
 import { SelfLightActor } from "../actors/SelfLightActor";
 import { Reconciler } from "../Reconciler";
 import { Item } from "@owlbear-rodeo/sdk";
-import { getMetadata } from "../../../util/getMetadata";
-import { LightConfig } from "../../../types/LightConfig";
+import { hasLightConfig, readLightConfig } from "../../../util/lightKeys";
 
 export class SelfLightReactor extends Reactor {
   constructor(reconciler: Reconciler) {
@@ -12,15 +10,11 @@ export class SelfLightReactor extends Reactor {
   }
 
   filter(item: Item): boolean {
-    if (!(getPluginId("light") in item.metadata)) {
+    if (!hasLightConfig(item)) {
       return false;
     }
 
-    const config = getMetadata<LightConfig>(
-      item.metadata,
-      getPluginId("light"),
-      {}
-    );
+    const config = readLightConfig(item);
 
     // Only show self light for primary lights that are angled
     return (

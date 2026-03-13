@@ -2,8 +2,7 @@ import { buildLight, isLight, Item, Light } from "@owlbear-rodeo/sdk";
 import { Actor } from "../Actor";
 import { Reconciler } from "../Reconciler";
 import { LightConfig } from "../../../types/LightConfig";
-import { getMetadata } from "../../../util/getMetadata";
-import { getPluginId } from "../../../util/getPluginId";
+import { readLightConfig } from "../../../util/lightKeys";
 
 export class LightActor extends Actor {
   // ID of the current light item
@@ -20,11 +19,7 @@ export class LightActor extends Actor {
   }
 
   update(parent: Item) {
-    const config = getMetadata<LightConfig>(
-      parent.metadata,
-      getPluginId("light"),
-      {}
-    );
+    const config = readLightConfig(parent);
     this.reconciler.patcher.updateItems([
       this.light,
       (item) => {
@@ -36,11 +31,7 @@ export class LightActor extends Actor {
   }
 
   private parentToLight(parent: Item) {
-    const config = getMetadata<LightConfig>(
-      parent.metadata,
-      getPluginId("light"),
-      {}
-    );
+    const config = readLightConfig(parent);
     const light = buildLight()
       .attachedTo(parent.id)
       .position(parent.position)

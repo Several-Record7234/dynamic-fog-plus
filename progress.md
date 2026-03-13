@@ -1,8 +1,20 @@
 # Dynamic Fog Plus — Progress
 
-## Last Session: 2026-03-12
+## Last Session: 2026-03-13
 
 ### Completed This Session
+- **Flicker interop**: DFP now detects `com.flicker/fog-light` metadata alongside its own keys, treating Flicker lights identically for fog computation, persistence, and light overlays
+- **Namespace migration**: New DFP lights write to `rodeo.owlbear.dynamic-fog-plus/light`; reads check new key, legacy `rodeo.owlbear.dynamic-fog/light`, and Flicker key in priority order
+- **Light key helpers**: New `src/util/lightKeys.ts` — `hasLightConfig`, `readLightConfig`, `getLightKey` centralise multi-key detection across all consumers
+- **Fill rule loop-closure fix**: Changed persistence fog item from `evenodd` to `nonzero` fill rule — fixes gaps where corridors loop back to form islands
+- **EvenOdd normalization for fog shapes**: All fog paths set to `EvenOdd` before path ops, making visibility immune to CW/CCW drawing direction
+- **Persistence toggle preserves shape**: Toggle now flips fog item `visible` (cut/uncut) instead of deleting — shape survives reload naturally
+- **Initial position persistence**: Settings load triggers initial item scan so tokens get persistence at their starting position
+
+### Known Issues
+- Recurring frustum PathOp failures (union and difference) for certain fog shapes — harmless due to backup/restore, but shadow may be missing for affected shapes at some token positions
+
+### Previous Session: 2026-03-12
 - **OBR 500-command ceiling discovered and fixed**: OBR silently rejects Path item updates when total command count exceeds ~500. Previous thresholds (1500/3000/8000) were catastrophically wrong.
 - **Curve-preserving simplification**: `simplifyAccumulated()` now only applies Douglas-Peucker to runs of consecutive LINE commands, passing native curves (CONIC, CUBIC, QUAD) through unchanged. ~3.5x command reduction (101→29 for overlapping circles, 4 for full circle, 2 per doorway arc).
 - **Command-based budget**: Renamed `getTotalVertexCount()` → `getTotalCommandCount()`, counts ALL commands including CLOSE. New thresholds: soft=200, hard=350, reject=450.
@@ -16,9 +28,6 @@
 - **EvenOdd normalization for fog shapes**: All fog paths set to `EvenOdd` fill type before path ops, making computation immune to CW/CCW drawing direction.
 - **Initial position persistence**: Settings load now triggers initial item scan so tokens get their starting position persisted without needing to move first.
 - Full complex map explored: 304 commands, <50ms processing, 15 fog shapes.
-
-### Known Issues
-- Recurring frustum PathOp failures (union and difference) for certain fog shapes — harmless due to backup/restore, but shadow may be missing for affected shapes at some token positions.
 
 ### Previous Session: 2026-03-10
 - PRIMARY/SECONDARY light type distinction implemented
@@ -53,7 +62,7 @@
 - [ ] Interaction with Aurora if both are active on the same map item
 
 ## Next Steps
-- [ ] Investigate worker PathOp.Union frustum failure (single occurrence, needs reproduction)
+- [ ] Investigate recurring worker PathOp frustum failures (harmless but could indicate edge-case geometry)
 - [ ] Performance benchmark on larger scenes (15-wall scene: ~45ms avg, no serial baseline)
 - [ ] Consider building Retrace (fog eraser) tool into the extension
 - [ ] Consider per-player vision (local fog cutouts approach)

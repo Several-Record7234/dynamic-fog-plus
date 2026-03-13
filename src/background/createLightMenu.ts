@@ -1,5 +1,10 @@
 import OBR from "@owlbear-rodeo/sdk";
 import { getPluginId } from "../util/getPluginId";
+import {
+  DFP_LIGHT_KEY,
+  LEGACY_LIGHT_KEY,
+  FLICKER_LIGHT_KEY,
+} from "../util/lightKeys";
 
 import lightOnIcon from "../assets/light-on.svg";
 import lightSettingsIcon from "../assets/light-settings.svg";
@@ -14,7 +19,9 @@ export function createLightMenu() {
         filter: {
           every: [
             { key: "type", value: "IMAGE" },
-            { key: ["metadata", getPluginId("light")], value: undefined },
+            { key: ["metadata", DFP_LIGHT_KEY], value: undefined },
+            { key: ["metadata", LEGACY_LIGHT_KEY], value: undefined },
+            { key: ["metadata", FLICKER_LIGHT_KEY], value: undefined },
           ],
           permissions: ["UPDATE"],
         },
@@ -26,7 +33,9 @@ export function createLightMenu() {
           every: [
             { key: "type", value: "SHAPE" },
             { key: "shapeType", value: "CIRCLE" },
-            { key: ["metadata", getPluginId("light")], value: undefined },
+            { key: ["metadata", DFP_LIGHT_KEY], value: undefined },
+            { key: ["metadata", LEGACY_LIGHT_KEY], value: undefined },
+            { key: ["metadata", FLICKER_LIGHT_KEY], value: undefined },
           ],
           permissions: ["UPDATE"],
         },
@@ -45,7 +54,7 @@ export function createLightMenu() {
 
       await OBR.scene.items.updateItems(context.items, (items) => {
         for (const item of items) {
-          item.metadata[getPluginId("light")] = {
+          item.metadata[DFP_LIGHT_KEY] = {
             attenuationRadius,
             sourceRadius,
             falloff,
@@ -62,12 +71,10 @@ export function createLightMenu() {
         icon: lightSettingsIcon,
         label: "Light Settings",
         filter: {
-          every: [
-            {
-              key: ["metadata", getPluginId("light")],
-              value: undefined,
-              operator: "!=",
-            },
+          some: [
+            { key: ["metadata", DFP_LIGHT_KEY], value: undefined, operator: "!=" },
+            { key: ["metadata", LEGACY_LIGHT_KEY], value: undefined, operator: "!=" },
+            { key: ["metadata", FLICKER_LIGHT_KEY], value: undefined, operator: "!=" },
           ],
           permissions: ["UPDATE"],
         },
