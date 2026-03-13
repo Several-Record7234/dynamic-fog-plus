@@ -68,8 +68,17 @@ export function createLightMenu() {
         icon: lightSettingsIcon,
         label: "Light Settings",
         filter: {
-          some: [
+          every: [
             { key: ["metadata", DFP_LIGHT_KEY], value: undefined, operator: "!=" },
+          ],
+          permissions: ["UPDATE"],
+        },
+      },
+      {
+        icon: lightSettingsIcon,
+        label: "Light Settings",
+        filter: {
+          every: [
             { key: ["metadata", LEGACY_LIGHT_KEY], value: undefined, operator: "!=" },
           ],
           permissions: ["UPDATE"],
